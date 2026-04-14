@@ -59,7 +59,7 @@ fn file_attr(size: u64) -> FileAttr {
 }
 
 impl Filesystem for OpenDuckFs {
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         match ino {
             FUSE_ROOT_ID => {
                 reply.attr(
@@ -210,13 +210,14 @@ impl Filesystem for OpenDuckFs {
         _uid: Option<u32>,
         _gid: Option<u32>,
         size: Option<u64>,
-        _fh: Option<u64>,
-        _ctime: Option<fuser::TimeOrNow>,
         _atime: Option<fuser::TimeOrNow>,
         _mtime: Option<fuser::TimeOrNow>,
-        ctime: Option<Duration>,
-        _chgtime: Option<fuser::TimeOrNow>,
-        _bkuptime: Option<fuser::TimeOrNow>,
+        ctime: Option<std::time::SystemTime>,
+        _fh: Option<u64>,
+        _crtime: Option<std::time::SystemTime>,
+        _chgtime: Option<std::time::SystemTime>,
+        _bkuptime: Option<std::time::SystemTime>,
+        _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
         if ino != FILE_INO {
@@ -234,7 +235,7 @@ impl Filesystem for OpenDuckFs {
             attr.size = size;
         }
         if let Some(ct) = ctime {
-            attr.ctime = UNIX_EPOCH + ct;
+            attr.ctime = ct;
         }
         reply.attr(&TTL, &attr);
     }
