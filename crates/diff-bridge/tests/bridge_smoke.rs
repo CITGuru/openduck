@@ -65,10 +65,10 @@ fn bridge_overwrite_and_read() {
         let handle = openduck_bridge_open(db_name.as_ptr(), pg_url.as_ptr(), data_dir.as_ptr());
         assert!(!handle.is_null());
 
-        let data_a = vec![0xAAu8; 128];
+        let data_a = [0xAAu8; 128];
         openduck_bridge_write(handle, 0, data_a.as_ptr(), 128);
 
-        let data_b = vec![0xBBu8; 64];
+        let data_b = [0xBBu8; 64];
         openduck_bridge_write(handle, 32, data_b.as_ptr(), 64);
 
         openduck_bridge_fsync(handle);

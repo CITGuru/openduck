@@ -32,9 +32,10 @@ struct WorkerState {
 }
 
 /// How the worker connects DuckDB to differential storage.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum StorageMode {
     /// No differential storage — use db_path or in-memory (current default).
+    #[default]
     Direct,
     /// Mount via FUSE, open the mounted path. The caller must ensure
     /// `openduck-fuse` is already running at the given mountpoint.
@@ -48,12 +49,6 @@ pub enum StorageMode {
         postgres_url: String,
         data_dir: PathBuf,
     },
-}
-
-impl Default for StorageMode {
-    fn default() -> Self {
-        Self::Direct
-    }
 }
 
 /// Worker configuration.
@@ -92,6 +87,7 @@ impl Default for WorkerService {
 
 /// Validate `request_token` against `OPENDUCK_TOKEN`.
 /// Dev mode (unset/empty `OPENDUCK_TOKEN`) accepts any token.
+#[allow(clippy::result_large_err)]
 fn validate_token(request_token: &str) -> Result<(), Status> {
     let expected = std::env::var("OPENDUCK_TOKEN").unwrap_or_default();
     if expected.is_empty() {

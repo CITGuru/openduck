@@ -44,6 +44,7 @@ pub fn hybrid_enabled() -> bool {
 ///
 /// - If `OPENDUCK_TOKEN` is unset or empty: dev mode — any token (including empty) is accepted.
 /// - If `OPENDUCK_TOKEN` is set: `request_token` must match (constant-time comparison).
+#[allow(clippy::result_large_err)]
 pub fn validate_token(request_token: &str) -> Result<(), Status> {
     let expected = std::env::var("OPENDUCK_TOKEN").unwrap_or_default();
     if expected.is_empty() {
