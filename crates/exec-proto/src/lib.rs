@@ -11,4 +11,5 @@ pub use openduck::v1::execution_service_client::ExecutionServiceClient;
 pub use openduck::v1::execution_service_server::{ExecutionService, ExecutionServiceServer};
 pub use openduck::v1::{
     ArrowIpcBatch, CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest,
+    RegisterWorkerReply, WorkerRegistration,
 };

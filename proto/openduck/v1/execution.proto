@@ -8,6 +8,8 @@ service ExecutionService {
   // Execute a remote plan fragment; stream result batches (Arrow IPC bytes).
   rpc ExecuteFragment(ExecuteFragmentRequest) returns (stream ExecuteFragmentChunk);
   rpc CancelExecution(CancelRequest) returns (CancelReply);
+  // Workers register capabilities so the gateway can route by database affinity.
+  rpc RegisterWorker(WorkerRegistration) returns (RegisterWorkerReply);
 }
 
 message ExecuteFragmentRequest {
@@ -41,4 +43,25 @@ message CancelRequest {
 
 message CancelReply {
   bool acknowledged = 1;
+}
+
+// ── Worker self-description & affinity routing ──────────────────────────
+
+// A worker describes itself to the gateway on startup.
+message WorkerRegistration {
+  // Unique worker id (UUID recommended).
+  string worker_id = 1;
+  // gRPC endpoint the gateway should use to reach this worker.
+  string endpoint = 2;
+  // Databases this worker can serve (empty = any).
+  repeated string databases = 3;
+  // Opaque compute context (e.g. "region=us-east-1,instance=i-abc123").
+  // Workers with the same compute_context are interchangeable for routing.
+  string compute_context = 4;
+  // Max concurrent executions this worker accepts (0 = unlimited).
+  uint32 max_concurrency = 5;
+}
+
+message RegisterWorkerReply {
+  bool accepted = 1;
 }

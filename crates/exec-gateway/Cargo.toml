@@ -20,8 +20,8 @@ tracing-subscriber.workspace = true
 bytes.workspace = true
 tokio-stream.workspace = true
 uuid.workspace = true
-arrow = { version = "54", default-features = false, features = ["ipc"] }
-duckdb = { version = "1.10501", features = ["bundled"] }
+arrow = { version = "58", default-features = false, features = ["ipc"] }
+duckdb = { version = "1.10501", features = ["bundled", "appender-arrow"] }
 
 [dev-dependencies]
 exec-worker = { path = "../exec-worker" }

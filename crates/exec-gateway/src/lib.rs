@@ -17,6 +17,7 @@ use exec_proto::openduck::v1::execution_service_server::{
 };
 use exec_proto::openduck::v1::{
     CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest,
+    RegisterWorkerReply, WorkerRegistration,
 };
 use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
@@ -82,8 +83,79 @@ pub fn worker_base_urls() -> Vec<String> {
         .collect()
 }
 
+// ── Worker registry with database-affinity routing ─────────────────────
+
+/// A registered worker's capabilities, used for affinity routing.
+#[derive(Debug, Clone)]
+pub struct RegisteredWorker {
+    pub worker_id: String,
+    pub endpoint: String,
+    pub databases: Vec<String>,
+    pub compute_context: String,
+    pub max_concurrency: u32,
+}
+
+/// Thread-safe worker registry. Workers register via `RegisterWorker` RPC;
+/// the gateway routes fragments preferring workers that declare affinity for
+/// the requested database.
+#[derive(Default)]
+pub struct WorkerRegistry {
+    workers: Mutex<Vec<RegisteredWorker>>,
+    next: AtomicUsize,
+}
+
+impl WorkerRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(&self, w: RegisteredWorker) {
+        if let Ok(mut guard) = self.workers.lock() {
+            guard.retain(|existing| existing.worker_id != w.worker_id);
+            guard.push(w);
+        }
+    }
+
+    /// Pick the best worker for `database`. Prefers workers that explicitly
+    /// list the database; falls back to round-robin over all workers.
+    pub fn pick(&self, database: &str) -> Option<String> {
+        let guard = self.workers.lock().ok()?;
+        if guard.is_empty() {
+            return None;
+        }
+
+        if !database.is_empty() {
+            let affinity: Vec<&RegisteredWorker> = guard
+                .iter()
+                .filter(|w| w.databases.iter().any(|d| d == database))
+                .collect();
+            if !affinity.is_empty() {
+                let idx = self.next.fetch_add(1, Ordering::Relaxed) % affinity.len();
+                return Some(affinity[idx].endpoint.clone());
+            }
+        }
+
+        // Fallback: round-robin over all registered workers.
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % guard.len();
+        Some(guard[idx].endpoint.clone())
+    }
+
+    pub fn len(&self) -> usize {
+        self.workers.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+// ── Gateway implementation ─────────────────────────────────────────────
+
 pub struct GatewayImpl {
-    workers: Vec<String>,
+    /// Static worker list from env (used as fallback when registry is empty).
+    static_workers: Vec<String>,
+    /// Dynamic registry populated by `RegisterWorker` RPCs.
+    registry: Arc<WorkerRegistry>,
     next: AtomicUsize,
     sem: Arc<Semaphore>,
     executions: Arc<Mutex<HashMap<String, String>>>,
@@ -93,7 +165,8 @@ impl GatewayImpl {
     pub fn new(workers: Vec<String>) -> Self {
         let n = max_in_flight().max(1);
         Self {
-            workers,
+            static_workers: workers,
+            registry: Arc::new(WorkerRegistry::new()),
             next: AtomicUsize::new(0),
             sem: Arc::new(Semaphore::new(n)),
             executions: Arc::new(Mutex::new(HashMap::new())),
@@ -102,6 +175,19 @@ impl GatewayImpl {
 
     pub fn from_env() -> Self {
         Self::new(worker_base_urls())
+    }
+
+    /// Select a worker endpoint: prefer registry affinity, then registry
+    /// round-robin, then static list round-robin.
+    fn select_worker(&self, database: &str) -> Option<String> {
+        if let Some(ep) = self.registry.pick(database) {
+            return Some(ep);
+        }
+        if self.static_workers.is_empty() {
+            return None;
+        }
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.static_workers.len();
+        Some(self.static_workers[idx].clone())
     }
 }
 
@@ -116,12 +202,6 @@ impl ExecutionService for GatewayImpl {
     ) -> Result<Response<Self::ExecuteFragmentStream>, Status> {
         let mut inner = request.into_inner();
         validate_token(&inner.access_token)?;
-
-        if self.workers.is_empty() {
-            return Err(Status::failed_precondition(
-                "no workers configured; set OPENDUCK_WORKER_ADDRS",
-            ));
-        }
 
         if inner.execution_id.is_empty() {
             inner.execution_id = Uuid::new_v4().to_string();
@@ -163,9 +243,13 @@ impl ExecutionService for GatewayImpl {
             }
         }
 
+        let uri = self.select_worker(&inner.database).ok_or_else(|| {
+            Status::failed_precondition(
+                "no workers available; set OPENDUCK_WORKER_ADDRS or register workers via RegisterWorker RPC",
+            )
+        })?;
+
         let execution_id = inner.execution_id.clone();
-        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        let uri = self.workers[idx].clone();
         if let Ok(mut guard) = self.executions.lock() {
             guard.insert(execution_id.clone(), uri.clone());
         }
@@ -260,6 +344,33 @@ impl ExecutionService for GatewayImpl {
                 acknowledged: false,
             })),
         }
+    }
+
+    async fn register_worker(
+        &self,
+        request: Request<WorkerRegistration>,
+    ) -> Result<Response<RegisterWorkerReply>, Status> {
+        let reg = request.into_inner();
+        if reg.endpoint.is_empty() {
+            return Err(Status::invalid_argument("endpoint is required"));
+        }
+        let worker_id = if reg.worker_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            reg.worker_id.clone()
+        };
+        eprintln!(
+            "register_worker: id={worker_id} endpoint={} databases={:?} ctx={}",
+            reg.endpoint, reg.databases, reg.compute_context,
+        );
+        self.registry.register(RegisteredWorker {
+            worker_id,
+            endpoint: reg.endpoint,
+            databases: reg.databases,
+            compute_context: reg.compute_context,
+            max_concurrency: reg.max_concurrency,
+        });
+        Ok(Response::new(RegisterWorkerReply { accepted: true }))
     }
 }
 

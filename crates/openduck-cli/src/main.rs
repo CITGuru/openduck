@@ -201,6 +201,7 @@ async fn run_serve(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         ducklake_metadata: cli.ducklake_metadata,
         ducklake_data_path: cli.ducklake_data,
         storage,
+        ..Default::default()
     };
 
     tracing::info!(
@@ -265,6 +266,7 @@ async fn run_worker(
         ducklake_metadata,
         ducklake_data_path: ducklake_data,
         storage,
+        ..Default::default()
     };
 
     tracing::info!(

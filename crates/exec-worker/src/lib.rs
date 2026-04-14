@@ -15,6 +15,7 @@ use exec_proto::openduck::v1::execution_service_server::{
 };
 use exec_proto::openduck::v1::{
     ArrowIpcBatch, CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest,
+    RegisterWorkerReply, WorkerRegistration,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -62,6 +63,14 @@ pub struct WorkerConfig {
     pub ducklake_data_path: Option<String>,
     /// How the worker accesses differential storage.
     pub storage: StorageMode,
+    /// Unique worker id (defaults to a random UUID at startup).
+    pub worker_id: String,
+    /// Databases this worker can serve (empty = any).
+    pub databases: Vec<String>,
+    /// Opaque compute context for affinity routing (e.g. "region=us-east-1").
+    pub compute_context: String,
+    /// Max concurrent executions (0 = unlimited).
+    pub max_concurrency: u32,
 }
 
 #[derive(Clone)]
@@ -168,6 +177,10 @@ fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// Max number of record batches to coalesce into a single Arrow IPC message.
+/// Amortises the per-message schema header overhead while keeping memory bounded.
+const BATCHES_PER_IPC_MESSAGE: usize = 8;
+
 fn run_sql_arrow_batches(
     sql: &str,
     execution_id: &str,
@@ -180,18 +193,35 @@ fn run_sql_arrow_batches(
     let arrow = stmt.query_arrow([]).map_err(|e| e.to_string())?;
     let handle = tokio::runtime::Handle::current();
 
+    let mut pending: Vec<arrow::record_batch::RecordBatch> = Vec::new();
+    let mut schema_ref: Option<arrow::datatypes::SchemaRef> = None;
+
     for batch in arrow {
         if cancel.load(Ordering::Relaxed) {
             return Err(format!("execution cancelled: {execution_id}"));
         }
-        let schema = batch.schema();
-        let mut buf = Vec::new();
-        {
-            let mut w =
-                StreamWriter::try_new(&mut buf, schema.as_ref()).map_err(|e| e.to_string())?;
-            w.write(&batch).map_err(|e| e.to_string())?;
-            w.finish().map_err(|e| e.to_string())?;
+        if schema_ref.is_none() {
+            schema_ref = Some(batch.schema());
         }
+        pending.push(batch);
+
+        if pending.len() >= BATCHES_PER_IPC_MESSAGE {
+            let buf = encode_ipc_batch(schema_ref.as_ref().unwrap(), &pending)?;
+            pending.clear();
+            let chunk = ExecuteFragmentChunk {
+                payload: Some(Payload::ArrowBatch(ArrowIpcBatch {
+                    ipc_stream_payload: buf,
+                })),
+            };
+            if handle.block_on(tx.send(Ok(chunk))).is_err() {
+                return Ok(());
+            }
+        }
+    }
+
+    if !pending.is_empty() {
+        let schema = schema_ref.as_ref().unwrap();
+        let buf = encode_ipc_batch(schema, &pending)?;
         let chunk = ExecuteFragmentChunk {
             payload: Some(Payload::ArrowBatch(ArrowIpcBatch {
                 ipc_stream_payload: buf,
@@ -201,7 +231,21 @@ fn run_sql_arrow_batches(
             return Ok(());
         }
     }
+
     Ok(())
+}
+
+fn encode_ipc_batch(
+    schema: &arrow::datatypes::Schema,
+    batches: &[arrow::record_batch::RecordBatch],
+) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, schema).map_err(|e| e.to_string())?;
+    for batch in batches {
+        writer.write(batch).map_err(|e| e.to_string())?;
+    }
+    writer.finish().map_err(|e| e.to_string())?;
+    Ok(buf)
 }
 
 #[tonic::async_trait]
@@ -306,6 +350,18 @@ impl ExecutionService for WorkerService {
         Ok(Response::new(CancelReply {
             acknowledged: cancelled,
         }))
+    }
+
+    async fn register_worker(
+        &self,
+        request: Request<WorkerRegistration>,
+    ) -> Result<Response<RegisterWorkerReply>, Status> {
+        let reg = request.into_inner();
+        eprintln!(
+            "register_worker: id={} endpoint={} databases={:?} ctx={}",
+            reg.worker_id, reg.endpoint, reg.databases, reg.compute_context,
+        );
+        Ok(Response::new(RegisterWorkerReply { accepted: true }))
     }
 }
 

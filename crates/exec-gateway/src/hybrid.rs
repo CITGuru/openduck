@@ -185,17 +185,95 @@ pub fn parse_openduck_run(hint: &str) -> Option<PlanNode> {
     })
 }
 
-/// Resolve `Auto` placement for all nodes using a simple heuristic:
-/// - Scan nodes → check whether the table is in the `remote_tables` set.
-/// - Other nodes → inherit from the majority of children; default to `Local`.
+// ═════════════════════════════════════════════════════════════════════════════
+// Table source metadata — per-table origin tracking for automatic plan splitting
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Describes where a table lives and which federation provider owns it.
+/// This is the OpenDuck equivalent of datafusion-federation's `FederatedTableSource`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableSource {
+    /// Fully qualified table name (e.g. "mydb.public.users").
+    pub table: String,
+    /// Name of the federation provider (e.g. "openduck-worker").
+    pub provider: String,
+    /// Opaque compute context that identifies the specific backend instance.
+    /// Workers with the same `compute_context` are co-located — their tables
+    /// can be joined remotely without a bridge.
+    pub compute_context: String,
+    /// Database the table belongs to.
+    pub database: String,
+}
+
+/// Registry of known table sources, used by the planner to resolve `Auto`
+/// placement and identify the largest federable sub-plans.
+#[derive(Debug, Clone, Default)]
+pub struct TableSourceRegistry {
+    sources: std::collections::HashMap<String, TableSource>,
+}
+
+impl TableSourceRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(&mut self, source: TableSource) {
+        self.sources.insert(source.table.clone(), source);
+    }
+
+    pub fn get(&self, table: &str) -> Option<&TableSource> {
+        self.sources.get(table)
+    }
+
+    pub fn is_remote(&self, table: &str) -> bool {
+        self.sources.contains_key(table)
+    }
+
+    /// Returns true if two tables share the same provider and compute context
+    /// (they can be processed together remotely without a bridge).
+    pub fn are_co_located(&self, a: &str, b: &str) -> bool {
+        match (self.sources.get(a), self.sources.get(b)) {
+            (Some(sa), Some(sb)) => {
+                sa.provider == sb.provider && sa.compute_context == sb.compute_context
+            }
+            _ => false,
+        }
+    }
+
+    /// All tables that belong to a given compute context.
+    pub fn tables_for_context(&self, ctx: &str) -> Vec<&TableSource> {
+        self.sources
+            .values()
+            .filter(|s| s.compute_context == ctx)
+            .collect()
+    }
+}
+
+/// Resolve `Auto` placement for all nodes using table source metadata.
+///
+/// Uses `TableSourceRegistry` for rich origin data (provider, compute context),
+/// with fallback to a simple `HashSet<String>` of remote table names.
 pub fn resolve_auto(node: &mut PlanNode, remote_tables: &std::collections::HashSet<String>) {
+    resolve_auto_with_registry(node, remote_tables, None);
+}
+
+/// Resolve `Auto` placement with an optional `TableSourceRegistry` for
+/// richer co-location and affinity decisions.
+pub fn resolve_auto_with_registry(
+    node: &mut PlanNode,
+    remote_tables: &std::collections::HashSet<String>,
+    registry: Option<&TableSourceRegistry>,
+) {
     for child in &mut node.children {
-        resolve_auto(child, remote_tables);
+        resolve_auto_with_registry(child, remote_tables, registry);
     }
     if node.placement == Placement::Auto {
         node.placement = match &node.kind {
             NodeKind::Scan { table } => {
-                if remote_tables.contains(table) {
+                let is_remote = registry
+                    .map(|r| r.is_remote(table))
+                    .unwrap_or_else(|| remote_tables.contains(table));
+                if is_remote {
                     Placement::Remote
                 } else {
                     Placement::Local
@@ -219,6 +297,139 @@ pub fn resolve_auto(node: &mut PlanNode, remote_tables: &std::collections::HashS
                 }
             }
         };
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Compute pushdown — largest federable subplan identification
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Identify the largest sub-trees whose scans all share the same compute
+/// context and collapse them into single `RemoteSql` nodes. This is the
+/// OpenDuck equivalent of datafusion-federation's `FederationOptimizerRule`.
+///
+/// The algorithm walks top-down:
+/// 1. For each node, check if **all** descendant scans belong to the same
+///    compute context (via `subplan_context`).
+/// 2. If yes, replace the entire sub-tree with a `RemoteSql` node carrying
+///    the SQL to execute on that context — this is the largest possible
+///    pushdown.
+/// 3. If no, recurse into children and try to collapse them individually.
+pub fn pushdown_federable_subplans(
+    root: &mut PlanNode,
+    registry: &TableSourceRegistry,
+) {
+    *root = pushdown_recursive_owned(root.clone(), registry);
+}
+
+/// Returns `Some(context)` if every Scan under `node` belongs to the same
+/// remote compute context, `None` otherwise.
+fn subplan_context(node: &PlanNode, registry: &TableSourceRegistry) -> Option<String> {
+    match &node.kind {
+        NodeKind::Scan { table } => registry
+            .get(table)
+            .map(|s| s.compute_context.clone()),
+        NodeKind::Bridge { .. } | NodeKind::RunHint { .. } => None,
+        NodeKind::RemoteSql { .. } => None,
+        _ => {
+            if node.children.is_empty() {
+                return None;
+            }
+            let mut ctx: Option<String> = None;
+            for child in &node.children {
+                match subplan_context(child, registry) {
+                    Some(child_ctx) => match &ctx {
+                        Some(c) if c != &child_ctx => return None,
+                        None => ctx = Some(child_ctx),
+                        _ => {}
+                    },
+                    None => return None,
+                }
+            }
+            ctx
+        }
+    }
+}
+
+/// Generate a SQL string for a plan node tree (best-effort reconstruction).
+fn node_to_sql(node: &PlanNode) -> String {
+    match &node.kind {
+        NodeKind::Scan { table } => format!("SELECT * FROM {table}"),
+        NodeKind::Filter { predicate } => {
+            if let Some(child) = node.children.first() {
+                format!("SELECT * FROM ({}) _f WHERE {predicate}", node_to_sql(child))
+            } else {
+                format!("SELECT * WHERE {predicate}")
+            }
+        }
+        NodeKind::Project { columns } => {
+            let cols = columns.join(", ");
+            if let Some(child) = node.children.first() {
+                format!("SELECT {cols} FROM ({}) _p", node_to_sql(child))
+            } else {
+                format!("SELECT {cols}")
+            }
+        }
+        NodeKind::Aggregate { keys } => {
+            let keys_str = keys.join(", ");
+            if let Some(child) = node.children.first() {
+                format!(
+                    "SELECT {keys_str}, COUNT(*) FROM ({}) _a GROUP BY {keys_str}",
+                    node_to_sql(child)
+                )
+            } else {
+                format!("SELECT {keys_str}")
+            }
+        }
+        NodeKind::HashJoin { condition } => {
+            let left = node
+                .children
+                .first()
+                .map(node_to_sql)
+                .unwrap_or_default();
+            let right = node
+                .children
+                .get(1)
+                .map(node_to_sql)
+                .unwrap_or_default();
+            format!("SELECT * FROM ({left}) _l JOIN ({right}) _r ON {condition}")
+        }
+        NodeKind::RemoteSql { sql } => sql.clone(),
+        NodeKind::RunHint { sql, .. } => sql.clone(),
+        NodeKind::Bridge { .. } => String::new(),
+    }
+}
+
+fn pushdown_recursive_owned(node: PlanNode, registry: &TableSourceRegistry) -> PlanNode {
+    // If this entire subtree is in one context, collapse it now (top-down
+    // "largest subplan first" strategy).
+    if !matches!(node.kind, NodeKind::RemoteSql { .. } | NodeKind::Bridge { .. } | NodeKind::RunHint { .. })
+        && subplan_context(&node, registry).is_some()
+    {
+        let sql = node_to_sql(&node);
+        if !sql.is_empty() {
+            return PlanNode {
+                id: node.id,
+                kind: NodeKind::RemoteSql { sql },
+                placement: Placement::Remote,
+                children: vec![],
+            };
+        }
+    }
+
+    // Otherwise, recurse into children — each child may be independently
+    // collapsible even though the parent is mixed local/remote.
+    let new_children = node
+        .children
+        .into_iter()
+        .map(|child| pushdown_recursive_owned(child, registry))
+        .collect();
+
+    PlanNode {
+        id: node.id,
+        kind: node.kind,
+        placement: node.placement,
+        children: new_children,
     }
 }
 
@@ -296,15 +507,47 @@ use exec_proto::openduck::v1::execution_service_client::ExecutionServiceClient;
 use exec_proto::openduck::v1::ExecuteFragmentRequest;
 use tonic::Request;
 
+/// Errors that can occur during hybrid execution.
+#[derive(Debug)]
+pub enum HybridError {
+    /// Worker or gateway is unreachable — caller may fall back to local-only.
+    Unavailable(String),
+    /// Worker returned an error during execution.
+    WorkerError(String),
+    /// Data decoding or materialization failed.
+    DataError(String),
+    /// Authentication failure.
+    AuthError(String),
+}
+
+impl fmt::Display for HybridError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HybridError::Unavailable(e) => write!(f, "worker unavailable: {e}"),
+            HybridError::WorkerError(e) => write!(f, "worker error: {e}"),
+            HybridError::DataError(e) => write!(f, "data error: {e}"),
+            HybridError::AuthError(e) => write!(f, "auth error: {e}"),
+        }
+    }
+}
+
+impl HybridError {
+    /// Returns true if the error is transient and the caller should consider
+    /// falling back to local-only execution.
+    pub fn is_fallback_eligible(&self) -> bool {
+        matches!(self, HybridError::Unavailable(_))
+    }
+}
+
 /// Collect Arrow IPC batches from a worker stream into `RecordBatch`es.
 async fn collect_remote_batches(
     worker_url: &str,
     sql: &str,
     token: &str,
-) -> Result<Vec<RecordBatch>, String> {
+) -> Result<Vec<RecordBatch>, HybridError> {
     let mut client = ExecutionServiceClient::connect(worker_url.to_string())
         .await
-        .map_err(|e| format!("connect to worker: {e}"))?;
+        .map_err(|e| HybridError::Unavailable(format!("connect to worker: {e}")))?;
 
     let request = ExecuteFragmentRequest {
         plan: sql.as_bytes().to_vec(),
@@ -316,21 +559,33 @@ async fn collect_remote_batches(
     let mut stream = client
         .execute_fragment(Request::new(request))
         .await
-        .map_err(|e| format!("execute_fragment: {e}"))?
+        .map_err(|e| {
+            let code = e.code();
+            if code == tonic::Code::Unauthenticated || code == tonic::Code::PermissionDenied {
+                HybridError::AuthError(e.to_string())
+            } else {
+                HybridError::Unavailable(format!("execute_fragment: {e}"))
+            }
+        })?
         .into_inner();
 
     let mut batches = Vec::new();
-    while let Some(chunk) = stream.message().await.map_err(|e| format!("stream: {e}"))? {
+    while let Some(chunk) = stream
+        .message()
+        .await
+        .map_err(|e| HybridError::Unavailable(format!("stream: {e}")))?
+    {
         match chunk.payload {
             Some(Payload::ArrowBatch(b)) if !b.ipc_stream_payload.is_empty() => {
                 let cursor = std::io::Cursor::new(b.ipc_stream_payload);
                 let reader = StreamReader::try_new(cursor, None)
-                    .map_err(|e| format!("arrow decode: {e}"))?;
+                    .map_err(|e| HybridError::DataError(format!("arrow decode: {e}")))?;
                 for batch in reader {
-                    batches.push(batch.map_err(|e| format!("arrow batch: {e}"))?);
+                    batches
+                        .push(batch.map_err(|e| HybridError::DataError(format!("arrow: {e}")))?);
                 }
             }
-            Some(Payload::Error(e)) => return Err(format!("worker error: {e}")),
+            Some(Payload::Error(e)) => return Err(HybridError::WorkerError(e)),
             Some(Payload::Finished(true)) => break,
             _ => {}
         }
@@ -338,7 +593,31 @@ async fn collect_remote_batches(
     Ok(batches)
 }
 
+fn arrow_to_duckdb_type(dt: &arrow::datatypes::DataType) -> &'static str {
+    use arrow::datatypes::DataType;
+    match dt {
+        DataType::Int8 => "TINYINT",
+        DataType::Int16 => "SMALLINT",
+        DataType::Int32 => "INTEGER",
+        DataType::Int64 => "BIGINT",
+        DataType::UInt8 => "UTINYINT",
+        DataType::UInt16 => "USMALLINT",
+        DataType::UInt32 => "UINTEGER",
+        DataType::UInt64 => "UBIGINT",
+        DataType::Float16 | DataType::Float32 => "FLOAT",
+        DataType::Float64 => "DOUBLE",
+        DataType::Utf8 | DataType::LargeUtf8 => "VARCHAR",
+        DataType::Boolean => "BOOLEAN",
+        DataType::Date32 | DataType::Date64 => "DATE",
+        DataType::Timestamp(_, _) => "TIMESTAMP",
+        _ => "VARCHAR",
+    }
+}
+
 /// Insert Arrow `RecordBatch`es into a local DuckDB connection as a temporary table.
+///
+/// Uses DuckDB's Appender API (`append_record_batch`) for bulk loading instead of
+/// per-row INSERT statements, which is orders of magnitude faster.
 fn materialize_batches(
     conn: &Connection,
     table_name: &str,
@@ -353,50 +632,34 @@ fn materialize_batches(
     }
 
     let schema = batches[0].schema();
-    let mut cols = Vec::new();
-    for field in schema.fields() {
-        let col_type = match field.data_type() {
-            arrow::datatypes::DataType::Int8 => "TINYINT",
-            arrow::datatypes::DataType::Int16 => "SMALLINT",
-            arrow::datatypes::DataType::Int32 => "INTEGER",
-            arrow::datatypes::DataType::Int64 => "BIGINT",
-            arrow::datatypes::DataType::Float32 => "FLOAT",
-            arrow::datatypes::DataType::Float64 => "DOUBLE",
-            arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => "VARCHAR",
-            arrow::datatypes::DataType::Boolean => "BOOLEAN",
-            _ => "VARCHAR",
-        };
-        cols.push(format!("{} {}", field.name(), col_type));
-    }
+    let cols: Vec<String> = schema
+        .fields()
+        .iter()
+        .map(|f| format!("{} {}", f.name(), arrow_to_duckdb_type(f.data_type())))
+        .collect();
     let create_sql = format!("CREATE TEMP TABLE {table_name} ({})", cols.join(", "));
     conn.execute_batch(&create_sql)
         .map_err(|e| format!("create temp table: {e}"))?;
 
+    let mut appender = conn
+        .appender(table_name)
+        .map_err(|e| format!("create appender for {table_name}: {e}"))?;
     for batch in batches {
-        for row_idx in 0..batch.num_rows() {
-            let mut values = Vec::new();
-            for col_idx in 0..batch.num_columns() {
-                let col = batch.column(col_idx);
-                let val = arrow::util::display::array_value_to_string(col, row_idx)
-                    .unwrap_or_else(|_| "NULL".to_string());
-                if col.is_null(row_idx) {
-                    values.push("NULL".to_string());
-                } else {
-                    values.push(format!("'{}'", val.replace('\'', "''")));
-                }
-            }
-            let insert = format!("INSERT INTO {table_name} VALUES ({})", values.join(", "));
-            conn.execute_batch(&insert)
-                .map_err(|e| format!("insert row: {e}"))?;
-        }
+        appender
+            .append_record_batch(batch.clone())
+            .map_err(|e| format!("append batch: {e}"))?;
     }
+    appender
+        .flush()
+        .map_err(|e| format!("flush appender: {e}"))?;
     Ok(())
 }
 
 /// Execute a hybrid query: remote fragments on workers, local join in DuckDB.
 ///
 /// `remote_sql`: SQL to execute on the worker (the remote portion)
-/// `local_sql`: SQL to execute locally, referencing `__remote` as the materialized remote data
+/// `local_setup_sql`: SQL run locally before the join (creates local tables)
+/// `local_join_sql`: SQL to execute locally, referencing `__remote` as the materialized remote data
 /// `worker_url`: gRPC endpoint of the worker
 /// `token`: access token
 ///
@@ -408,7 +671,9 @@ pub async fn execute_hybrid_join(
     worker_url: &str,
     token: &str,
 ) -> Result<i64, String> {
-    let batches = collect_remote_batches(worker_url, remote_sql, token).await?;
+    let batches = collect_remote_batches(worker_url, remote_sql, token)
+        .await
+        .map_err(|e| e.to_string())?;
     eprintln!(
         "hybrid: collected {} batch(es) from remote, {} total rows",
         batches.len(),
@@ -427,6 +692,58 @@ pub async fn execute_hybrid_join(
         .map_err(|e| format!("local join: {e}"))?;
 
     Ok(result)
+}
+
+/// Execute a hybrid query with automatic fallback to local-only execution
+/// when the remote worker is unreachable.
+///
+/// `remote_sql`: SQL to execute on the worker (the remote portion)
+/// `local_setup_sql`: SQL run locally before the join
+/// `local_join_sql`: SQL referencing `__remote` for the join
+/// `fallback_sql`: SQL to run locally if the worker is unreachable (should
+///                 produce the same result without the remote fragment)
+/// `worker_url`: gRPC endpoint of the worker
+/// `token`: access token
+pub async fn execute_hybrid_join_with_fallback(
+    remote_sql: &str,
+    local_setup_sql: &str,
+    local_join_sql: &str,
+    fallback_sql: Option<&str>,
+    worker_url: &str,
+    token: &str,
+) -> Result<i64, String> {
+    match collect_remote_batches(worker_url, remote_sql, token).await {
+        Ok(batches) => {
+            eprintln!(
+                "hybrid: collected {} batch(es) from remote, {} total rows",
+                batches.len(),
+                batches.iter().map(|b| b.num_rows()).sum::<usize>()
+            );
+            let conn = Connection::open_in_memory().map_err(|e| format!("duckdb: {e}"))?;
+            conn.execute_batch(local_setup_sql)
+                .map_err(|e| format!("local setup: {e}"))?;
+            materialize_batches(&conn, "__remote", &batches)?;
+            conn.query_row(local_join_sql, [], |row| row.get(0))
+                .map_err(|e| format!("local join: {e}"))
+        }
+        Err(e) if e.is_fallback_eligible() => {
+            if let Some(fb_sql) = fallback_sql {
+                eprintln!(
+                    "hybrid: worker unavailable ({e}), falling back to local-only execution"
+                );
+                let conn = Connection::open_in_memory().map_err(|e| format!("duckdb: {e}"))?;
+                conn.execute_batch(local_setup_sql)
+                    .map_err(|e| format!("local setup: {e}"))?;
+                conn.query_row(fb_sql, [], |row| row.get(0))
+                    .map_err(|e| format!("fallback query: {e}"))
+            } else {
+                Err(format!(
+                    "worker unavailable and no fallback configured: {e}"
+                ))
+            }
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -621,5 +938,207 @@ mod tests {
 
         assert!(explain.contains("Bridge(R→L)"), "plan must have bridge");
         assert_eq!(expected, 110, "golden parity: join sum must be 110");
+    }
+
+    // ── Table source registry tests ────────────────────────────────────
+
+    #[test]
+    fn table_source_registry_basic() {
+        let mut reg = TableSourceRegistry::new();
+        reg.register(TableSource {
+            table: "sales".into(),
+            provider: "worker".into(),
+            compute_context: "us-east-1".into(),
+            database: "analytics".into(),
+        });
+        reg.register(TableSource {
+            table: "orders".into(),
+            provider: "worker".into(),
+            compute_context: "us-east-1".into(),
+            database: "analytics".into(),
+        });
+
+        assert!(reg.is_remote("sales"));
+        assert!(reg.is_remote("orders"));
+        assert!(!reg.is_remote("local_table"));
+        assert!(reg.are_co_located("sales", "orders"));
+    }
+
+    #[test]
+    fn table_source_different_contexts_not_co_located() {
+        let mut reg = TableSourceRegistry::new();
+        reg.register(TableSource {
+            table: "sales".into(),
+            provider: "worker".into(),
+            compute_context: "us-east-1".into(),
+            database: "db1".into(),
+        });
+        reg.register(TableSource {
+            table: "logs".into(),
+            provider: "worker".into(),
+            compute_context: "eu-west-1".into(),
+            database: "db2".into(),
+        });
+
+        assert!(!reg.are_co_located("sales", "logs"));
+    }
+
+    #[test]
+    fn resolve_auto_with_registry_works() {
+        let mut reg = TableSourceRegistry::new();
+        reg.register(TableSource {
+            table: "remote_tab".into(),
+            provider: "worker".into(),
+            compute_context: "ctx1".into(),
+            database: "db".into(),
+        });
+
+        let mut plan = PlanNode {
+            id: 1,
+            kind: NodeKind::HashJoin {
+                condition: "a.k = b.k".into(),
+            },
+            placement: Placement::Auto,
+            children: vec![
+                scan(2, "local_tab", Placement::Auto),
+                scan(3, "remote_tab", Placement::Auto),
+            ],
+        };
+        let empty: HashSet<String> = HashSet::new();
+        resolve_auto_with_registry(&mut plan, &empty, Some(&reg));
+        assert_eq!(plan.children[0].placement, Placement::Local);
+        assert_eq!(plan.children[1].placement, Placement::Remote);
+    }
+
+    // ── Compute pushdown tests ─────────────────────────────────────────
+
+    #[test]
+    fn pushdown_collapses_co_located_join() {
+        let mut reg = TableSourceRegistry::new();
+        reg.register(TableSource {
+            table: "sales".into(),
+            provider: "worker".into(),
+            compute_context: "ctx1".into(),
+            database: "analytics".into(),
+        });
+        reg.register(TableSource {
+            table: "products".into(),
+            provider: "worker".into(),
+            compute_context: "ctx1".into(),
+            database: "analytics".into(),
+        });
+
+        let mut plan = PlanNode {
+            id: 1,
+            kind: NodeKind::HashJoin {
+                condition: "l.id = r.id".into(),
+            },
+            placement: Placement::Local,
+            children: vec![
+                scan(2, "local_users", Placement::Local),
+                PlanNode {
+                    id: 3,
+                    kind: NodeKind::HashJoin {
+                        condition: "s.pid = p.id".into(),
+                    },
+                    placement: Placement::Remote,
+                    children: vec![
+                        scan(4, "sales", Placement::Remote),
+                        scan(5, "products", Placement::Remote),
+                    ],
+                },
+            ],
+        };
+
+        pushdown_federable_subplans(&mut plan, &reg);
+
+        assert!(
+            matches!(&plan.children[1].kind, NodeKind::RemoteSql { sql } if sql.contains("sales") && sql.contains("products")),
+            "co-located join should be collapsed into RemoteSql, got: {:?}",
+            plan.children[1].kind
+        );
+    }
+
+    #[test]
+    fn pushdown_does_not_collapse_mixed_contexts() {
+        let mut reg = TableSourceRegistry::new();
+        reg.register(TableSource {
+            table: "a".into(),
+            provider: "worker".into(),
+            compute_context: "ctx1".into(),
+            database: "db1".into(),
+        });
+        reg.register(TableSource {
+            table: "b".into(),
+            provider: "worker".into(),
+            compute_context: "ctx2".into(),
+            database: "db2".into(),
+        });
+
+        let mut plan = PlanNode {
+            id: 1,
+            kind: NodeKind::HashJoin {
+                condition: "a.id = b.id".into(),
+            },
+            placement: Placement::Remote,
+            children: vec![
+                scan(2, "a", Placement::Remote),
+                scan(3, "b", Placement::Remote),
+            ],
+        };
+
+        pushdown_federable_subplans(&mut plan, &reg);
+
+        assert!(
+            !matches!(&plan.kind, NodeKind::RemoteSql { .. }),
+            "mixed-context join should NOT be collapsed"
+        );
+    }
+
+    #[test]
+    fn pushdown_collapses_single_remote_scan_with_filter() {
+        let mut reg = TableSourceRegistry::new();
+        reg.register(TableSource {
+            table: "events".into(),
+            provider: "worker".into(),
+            compute_context: "ctx1".into(),
+            database: "logs".into(),
+        });
+
+        let mut plan = PlanNode {
+            id: 1,
+            kind: NodeKind::Filter {
+                predicate: "ts > '2024-01-01'".into(),
+            },
+            placement: Placement::Remote,
+            children: vec![scan(2, "events", Placement::Remote)],
+        };
+
+        pushdown_federable_subplans(&mut plan, &reg);
+
+        assert!(
+            matches!(&plan.kind, NodeKind::RemoteSql { .. }),
+            "filter + scan on same context should collapse"
+        );
+    }
+
+    // ── HybridError tests ──────────────────────────────────────────────
+
+    #[test]
+    fn hybrid_error_unavailable_is_fallback_eligible() {
+        let err = HybridError::Unavailable("connection refused".into());
+        assert!(err.is_fallback_eligible());
+    }
+
+    #[test]
+    fn hybrid_error_worker_error_is_not_fallback_eligible() {
+        let err = HybridError::WorkerError("SQL syntax error".into());
+        assert!(!err.is_fallback_eligible());
+    }
+
+    #[test]
+    fn hybrid_error_auth_is_not_fallback_eligible() {
+        let err = HybridError::AuthError("bad token".into());
+        assert!(!err.is_fallback_eligible());
     }
 }
