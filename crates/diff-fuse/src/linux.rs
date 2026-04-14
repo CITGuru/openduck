@@ -42,7 +42,7 @@ fn file_attr(size: u64) -> FileAttr {
     FileAttr {
         ino: FILE_INO,
         size,
-        blocks: (size + 511) / 512,
+        blocks: size.div_ceil(512),
         atime: UNIX_EPOCH,
         mtime: UNIX_EPOCH,
         ctime: UNIX_EPOCH,
