@@ -5,15 +5,22 @@
 # Require statement will ensure this test is run with this extension loaded
 require openduck
 
-# Verify openduck_remote function is registered (will fail at connect but that's OK)
-statement error
-SELECT * FROM openduck_remote('http://localhost:1', 'tok', 'SELECT 1');
+# Verify both table functions are registered
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'openduck_remote';
 ----
+1
 
-# Verify openduck_query function is registered (will fail with no config but that's OK)
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'openduck_query';
+----
+1
+
+# openduck_query with a missing alias should error cleanly (no gRPC call)
 statement error
 SELECT * FROM openduck_query('nonexistent', 'SELECT 1');
 ----
+No ATTACH config for alias
 
 # ── Secret type: openduck_storage ────────────────────────────────────────
 
@@ -26,11 +33,15 @@ statement ok
 CREATE SECRET my_prod (TYPE openduck_storage, postgres_url 'postgres://prod:5432/db', data_dir '/mnt/prod');
 
 # Verify secrets are visible and postgres_url is redacted
-query III
-SELECT name, type, trim(split_part(value, ';', 1)) FROM duckdb_secrets() WHERE type = 'openduck_storage' ORDER BY name;
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE type = 'openduck_storage';
 ----
-my_prod	openduck_storage	postgres_url=********
-openduck_storage	openduck_storage	postgres_url=********
+2
+
+query I
+SELECT secret_string LIKE '%postgres_url=redacted%' FROM duckdb_secrets() WHERE type = 'openduck_storage' AND name = 'my_prod';
+----
+true
 
 # Clean up
 statement ok

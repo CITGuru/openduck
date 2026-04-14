@@ -1,0 +1,23 @@
+# name: test/sql/openduck_unavailable.test
+# description: test error messages for missing configuration and aliases
+# group: [sql]
+
+require openduck
+
+# openduck_query with a missing alias should fail with a helpful message
+statement error
+SELECT * FROM openduck_query('no_such_alias', 'SELECT 1');
+----
+No ATTACH config for alias
+
+# A second missing alias should also fail
+statement error
+SELECT * FROM openduck_query('production_db', 'SELECT * FROM users');
+----
+No ATTACH config for alias
+
+# openduck_remote and openduck_query are registered functions
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name IN ('openduck_remote', 'openduck_query');
+----
+2

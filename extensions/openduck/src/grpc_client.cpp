@@ -85,12 +85,20 @@ private:
 std::unique_ptr<GrpcStream>
 GrpcClient::ExecuteSQL(const std::string &sql, const std::string &database,
                        const std::string &token) {
+  auto state = impl_->channel->GetState(true);
+  if (state == GRPC_CHANNEL_SHUTDOWN) {
+    throw GatewayUnavailableError("OpenDuck gateway channel is shut down");
+  }
+
   ::openduck::v1::ExecuteFragmentRequest request;
   request.set_plan(sql);
   request.set_database(database);
   request.set_access_token(token);
 
   auto ctx = std::make_unique<grpc::ClientContext>();
+  auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(30);
+  ctx->set_deadline(deadline);
+
   auto reader = impl_->stub->ExecuteFragment(ctx.get(), request);
   return std::make_unique<GrpcStreamImpl>(std::move(ctx), std::move(reader));
 }
