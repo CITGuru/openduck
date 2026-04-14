@@ -159,6 +159,9 @@ pub unsafe extern "C" fn openduck_bridge_write(
 }
 
 /// Flush and sync. Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `handle` must be a valid pointer from `openduck_bridge_open`.
 #[no_mangle]
 pub unsafe extern "C" fn openduck_bridge_fsync(handle: *mut BridgeHandle) -> i32 {
     let h = &*handle;
@@ -193,6 +196,10 @@ pub unsafe extern "C" fn openduck_bridge_seal(handle: *mut BridgeHandle) -> *mut
 }
 
 /// Free a string returned by `openduck_bridge_seal`.
+///
+/// # Safety
+/// `ptr` must be a pointer returned by `openduck_bridge_seal`, or null.
+/// Must not be called twice on the same pointer.
 #[no_mangle]
 pub unsafe extern "C" fn openduck_bridge_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
@@ -202,6 +209,9 @@ pub unsafe extern "C" fn openduck_bridge_free_string(ptr: *mut c_char) {
 
 /// Get the logical file size (highest byte written + length).
 /// The bridge tracks this internally since PgStorageBackend doesn't expose file size.
+///
+/// # Safety
+/// `handle` must be a valid pointer from `openduck_bridge_open`.
 #[no_mangle]
 pub unsafe extern "C" fn openduck_bridge_get_size(handle: *mut BridgeHandle) -> u64 {
     let _ = &*handle;
