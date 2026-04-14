@@ -241,23 +241,34 @@ static void CopyColumn(const std::shared_ptr<arrow::Array> &array,
   }
 }
 
-// ── CopyIpcToDataChunk ──────────────────────────────────────────────────────
+// ── ReadAllIpcBatches ───────────────────────────────────────────────────────
 
-duckdb::idx_t CopyIpcToDataChunk(const std::string &ipc_bytes,
-                                 duckdb::DataChunk &chunk) {
+void ReadAllIpcBatches(
+    const std::string &ipc_bytes,
+    std::deque<std::shared_ptr<arrow::RecordBatch>> &out) {
   auto reader = OpenIpcStream(ipc_bytes);
+  while (true) {
+    std::shared_ptr<arrow::RecordBatch> batch;
+    auto status = reader->ReadNext(&batch);
+    if (!status.ok() || !batch) {
+      break;
+    }
+    if (batch->num_rows() > 0) {
+      out.push_back(std::move(batch));
+    }
+  }
+}
 
-  std::shared_ptr<arrow::RecordBatch> batch;
-  auto status = reader->ReadNext(&batch);
-  if (!status.ok() || !batch) {
+// ── CopyBatchToDataChunk ────────────────────────────────────────────────────
+
+duckdb::idx_t CopyBatchToDataChunk(
+    const std::shared_ptr<arrow::RecordBatch> &batch,
+    duckdb::DataChunk &chunk) {
+  if (!batch || batch->num_rows() == 0) {
     return 0;
   }
 
   auto count = static_cast<duckdb::idx_t>(batch->num_rows());
-  if (count == 0) {
-    return 0;
-  }
-
   chunk.SetCardinality(count);
   for (duckdb::idx_t col = 0; col < chunk.ColumnCount() &&
                               col < static_cast<duckdb::idx_t>(batch->num_columns());
@@ -266,6 +277,18 @@ duckdb::idx_t CopyIpcToDataChunk(const std::string &ipc_bytes,
                chunk.data[col].GetType(), count);
   }
   return count;
+}
+
+// ── CopyIpcToDataChunk (backward compat) ────────────────────────────────────
+
+duckdb::idx_t CopyIpcToDataChunk(const std::string &ipc_bytes,
+                                 duckdb::DataChunk &chunk) {
+  std::deque<std::shared_ptr<arrow::RecordBatch>> batches;
+  ReadAllIpcBatches(ipc_bytes, batches);
+  if (batches.empty()) {
+    return 0;
+  }
+  return CopyBatchToDataChunk(batches.front(), chunk);
 }
 
 } // namespace openduck

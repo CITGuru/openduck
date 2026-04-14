@@ -19,6 +19,7 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 
 #include <cstdlib>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -153,7 +154,7 @@ public:
 struct StreamState {
 	std::unique_ptr<GrpcClient> client;
 	std::unique_ptr<GrpcStream> stream;
-	std::optional<std::string> first_batch_ipc;
+	std::deque<std::shared_ptr<arrow::RecordBatch>> pending_batches;
 	bool done = false;
 	std::mutex lock;
 };
@@ -180,10 +181,11 @@ static void InitStreamAndSchema(OpenDuckTableData &data, vector<LogicalType> &re
 		return;
 	}
 
-	data.state->first_batch_ipc = std::move(first_ipc);
-	auto schema_info = ExtractSchema(*data.state->first_batch_ipc);
+	auto schema_info = ExtractSchema(*first_ipc);
 	return_types = std::move(schema_info.types);
 	names = std::move(schema_info.names);
+
+	ReadAllIpcBatches(*first_ipc, data.state->pending_batches);
 }
 
 static void SharedExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -196,21 +198,20 @@ static void SharedExecute(ClientContext &context, TableFunctionInput &data_p, Da
 		return;
 	}
 
-	std::optional<std::string> ipc_bytes;
-	if (state.first_batch_ipc) {
-		ipc_bytes = std::move(state.first_batch_ipc);
-		state.first_batch_ipc.reset();
-	} else {
-		ipc_bytes = state.stream->Next();
+	while (state.pending_batches.empty()) {
+		auto ipc_bytes = state.stream->Next();
+		if (!ipc_bytes) {
+			state.done = true;
+			output.SetCardinality(0);
+			return;
+		}
+		ReadAllIpcBatches(*ipc_bytes, state.pending_batches);
 	}
 
-	if (!ipc_bytes) {
-		state.done = true;
-		output.SetCardinality(0);
-		return;
-	}
+	auto batch = std::move(state.pending_batches.front());
+	state.pending_batches.pop_front();
 
-	auto rows = CopyIpcToDataChunk(*ipc_bytes, output);
+	auto rows = CopyBatchToDataChunk(batch, output);
 	if (rows == 0) {
 		state.done = true;
 		output.SetCardinality(0);

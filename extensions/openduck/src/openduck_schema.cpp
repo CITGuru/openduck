@@ -9,6 +9,8 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 
+#include <deque>
+
 namespace openduck {
 
 using namespace duckdb;
@@ -60,6 +62,8 @@ optional_ptr<CatalogEntry> OpenDuckSchemaEntry::LookupEntry(CatalogTransaction t
 		auto result = table_entry.get();
 		cached_tables_[table_name] = std::move(table_entry);
 		return result;
+	} catch (const GatewayUnavailableError &) {
+		return nullptr;
 	} catch (...) {
 		return nullptr;
 	}
@@ -80,24 +84,20 @@ void OpenDuckSchemaEntry::Scan(ClientContext &context, CatalogType type,
 		auto stream = client.ExecuteSQL(sql, config.database, config.token);
 
 		std::vector<std::string> table_names;
+		std::deque<std::shared_ptr<arrow::RecordBatch>> batches;
 		while (true) {
 			auto ipc = stream->Next();
 			if (!ipc) {
 				break;
 			}
+			ReadAllIpcBatches(*ipc, batches);
+		}
 
-			auto schema_info = ExtractSchema(*ipc);
-			if (schema_info.names.empty()) {
-				continue;
-			}
-
-			vector<LogicalType> types;
-			for (auto &t : schema_info.types) {
-				types.push_back(t);
-			}
+		vector<LogicalType> types = {LogicalType::VARCHAR};
+		for (auto &batch : batches) {
 			DataChunk chunk;
 			chunk.Initialize(Allocator::DefaultAllocator(), types);
-			auto rows = CopyIpcToDataChunk(*ipc, chunk);
+			auto rows = CopyBatchToDataChunk(batch, chunk);
 			for (idx_t i = 0; i < rows; i++) {
 				table_names.push_back(chunk.data[0].GetValue(i).GetValue<string>());
 			}
@@ -111,6 +111,7 @@ void OpenDuckSchemaEntry::Scan(ClientContext &context, CatalogType type,
 				callback(*entry);
 			}
 		}
+	} catch (const GatewayUnavailableError &) {
 	} catch (...) {
 	}
 }

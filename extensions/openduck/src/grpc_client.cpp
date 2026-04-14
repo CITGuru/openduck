@@ -6,6 +6,18 @@
 
 namespace openduck {
 
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+static void ThrowForStatus(const grpc::Status &status) {
+  if (status.error_code() == grpc::StatusCode::UNAVAILABLE) {
+    throw GatewayUnavailableError(
+        "OpenDuck gateway unreachable: " + status.error_message());
+  }
+  throw std::runtime_error("gRPC stream error (" +
+                           std::to_string(status.error_code()) +
+                           "): " + status.error_message());
+}
+
 // ── Impl (pimpl hides gRPC types from the header) ──────────────────────────
 
 struct GrpcClient::Impl {
@@ -42,8 +54,7 @@ public:
       finished_ = true;
       auto status = reader_->Finish();
       if (!status.ok()) {
-        throw std::runtime_error("gRPC stream error: " +
-                                 status.error_message());
+        ThrowForStatus(status);
       }
       return std::nullopt;
     }
@@ -63,7 +74,6 @@ public:
   }
 
 private:
-  // ctx_ declared before reader_ so reader_ is destroyed first
   std::unique_ptr<grpc::ClientContext> ctx_;
   std::unique_ptr<grpc::ClientReader<::openduck::v1::ExecuteFragmentChunk>>
       reader_;
@@ -83,6 +93,21 @@ GrpcClient::ExecuteSQL(const std::string &sql, const std::string &database,
   auto ctx = std::make_unique<grpc::ClientContext>();
   auto reader = impl_->stub->ExecuteFragment(ctx.get(), request);
   return std::make_unique<GrpcStreamImpl>(std::move(ctx), std::move(reader));
+}
+
+// ── GrpcClient::CancelExecution ────────────────────────────────────────────
+
+bool GrpcClient::CancelExecution(const std::string &execution_id) {
+  ::openduck::v1::CancelRequest request;
+  request.set_execution_id(execution_id);
+
+  ::openduck::v1::CancelReply reply;
+  grpc::ClientContext ctx;
+  auto status = impl_->stub->CancelExecution(&ctx, request, &reply);
+  if (!status.ok()) {
+    return false;
+  }
+  return reply.acknowledged();
 }
 
 } // namespace openduck

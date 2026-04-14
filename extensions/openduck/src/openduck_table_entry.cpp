@@ -5,6 +5,8 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
 
+#include <deque>
+
 namespace openduck {
 
 using namespace duckdb;
@@ -21,7 +23,8 @@ struct OpenDuckTableScanBindData : public TableFunctionData {
 struct OpenDuckTableScanGlobalState : public GlobalTableFunctionState {
 	std::unique_ptr<GrpcClient> client;
 	std::unique_ptr<GrpcStream> stream;
-	std::optional<std::string> first_batch_ipc;
+	std::deque<std::shared_ptr<arrow::RecordBatch>> pending_batches;
+	std::string execution_id;
 	bool done = false;
 	std::mutex lock;
 };
@@ -45,14 +48,20 @@ static void OpenDuckTableScanFunc(ClientContext &context, TableFunctionInput &da
 		return;
 	}
 
-	auto ipc_bytes = gstate.stream->Next();
-	if (!ipc_bytes) {
-		gstate.done = true;
-		output.SetCardinality(0);
-		return;
+	while (gstate.pending_batches.empty()) {
+		auto ipc_bytes = gstate.stream->Next();
+		if (!ipc_bytes) {
+			gstate.done = true;
+			output.SetCardinality(0);
+			return;
+		}
+		ReadAllIpcBatches(*ipc_bytes, gstate.pending_batches);
 	}
 
-	auto rows = CopyIpcToDataChunk(*ipc_bytes, output);
+	auto batch = std::move(gstate.pending_batches.front());
+	gstate.pending_batches.pop_front();
+
+	auto rows = CopyBatchToDataChunk(batch, output);
 	if (rows == 0) {
 		gstate.done = true;
 		output.SetCardinality(0);
