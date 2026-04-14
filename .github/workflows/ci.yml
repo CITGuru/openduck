@@ -42,7 +42,7 @@ jobs:
           DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
           PGPASSWORD: openduck
         run: |
-          sudo apt-get update && sudo apt-get install -y postgresql-client
+          sudo apt-get update && sudo apt-get install -y postgresql-client libfuse3-dev
           until pg_isready -h localhost -p 5432 -U openduck; do sleep 1; done
           for f in $(ls crates/diff-metadata/migrations/*.sql 2>/dev/null | sort); do
             psql -v ON_ERROR_STOP=1 "postgresql://openduck:openduck@localhost:5432/openduck_meta" -f "$f"
