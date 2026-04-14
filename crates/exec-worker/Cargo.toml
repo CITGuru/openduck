@@ -1,0 +1,28 @@
+[package]
+name = "exec-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "openduck-worker"
+path = "src/main.rs"
+
+[[bench]]
+name = "query_latency"
+harness = false
+
+[dependencies]
+exec-proto = { path = "../exec-proto" }
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+duckdb = { version = "1.10501", features = ["bundled"] }
+arrow = { version = "58", default-features = false, features = ["ipc"] }
+uuid.workspace = true
+

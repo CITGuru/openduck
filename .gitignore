@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+.env
+.env.*
+!.env.example
+.idea
+.vscode
+*.duckdb
+*.log
+.sqlx
+/docs/
+/target/

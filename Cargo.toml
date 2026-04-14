@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/diff-core",
+    "crates/diff-metadata",
+    "crates/diff-layer-fs",
+    "crates/diff-blob",
+    "crates/diff-bridge",
+    "crates/diff-fuse",
+    "crates/exec-proto",
+    "crates/exec-gateway",
+    "crates/exec-worker",
+    "crates/openduck-metrics",
+    "crates/openduck-cli",
+    "examples",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/openduck/openduck"
+
+[workspace.dependencies]
+tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "signal"] }
+tokio-stream = "0.1"
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+bytes = "1.9"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+object_store = { version = "0.11", features = ["aws"] }
+fuser = { version = "0.15", features = ["abi-7-23"] }
+libc = "0.2"
+async-trait = "0.1"
+opentelemetry = { version = "0.28", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio", "metrics"] }
+opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic", "metrics"] }

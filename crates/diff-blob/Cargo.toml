@@ -1,0 +1,11 @@
+[package]
+name = "diff-blob"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+object_store.workspace = true
+thiserror.workspace = true
+bytes = { workspace = true }
+tokio = { workspace = true }

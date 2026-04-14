@@ -1,0 +1,96 @@
+# ── Full OpenDuck Stack ──────────────────────────────────────────────────────
+#
+# Start everything:
+#   docker compose -f docker/docker-compose.full.yml up
+#
+# Then connect:
+#   import openduck
+#   con = openduck.connect("mydb", token="demo", endpoint="http://localhost:7878")
+#   con.sql("SELECT 1").show()
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: openduck
+      POSTGRES_PASSWORD: openduck
+      POSTGRES_DB: openduck_meta
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openduck -d openduck_meta"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio_minio_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: worker
+    environment:
+      OPENDUCK_TOKEN: demo
+      OPENDUCK_WORKER_LISTEN: "0.0.0.0:9898"
+    ports:
+      - "9898:9898"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: gateway
+    environment:
+      OPENDUCK_TOKEN: demo
+      OPENDUCK_WORKER_ADDRS: "http://worker:9898"
+    ports:
+      - "7878:7878"
+    depends_on:
+      - worker
+
+  # FUSE worker (optional — requires --privileged for /dev/fuse)
+  fuse-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: fuse
+    privileged: true
+    environment:
+      DATABASE_URL: postgres://openduck:openduck@postgres/openduck_meta
+    volumes:
+      - fusedata:/var/openduck
+    command:
+      - "--db"
+      - "mydb"
+      - "--postgres"
+      - "postgres://openduck:openduck@postgres/openduck_meta"
+      - "--data-dir"
+      - "/var/openduck/data"
+      - "--mountpoint"
+      - "/var/openduck/mount"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - fuse  # only starts with: docker compose --profile fuse up
+
+volumes:
+  pgdata: {}
+  miniodata: {}
+  fusedata: {}

@@ -1,0 +1,30 @@
+name: FUSE E2E (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      db_name:
+        description: Database name for e2e run
+        required: false
+        default: ci_e2e_db
+
+jobs:
+  fuse-e2e:
+    # Requires a Linux runner with /dev/fuse and permissions for FUSE mounts.
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 30
+    env:
+      DB_NAME: ${{ github.event.inputs.db_name }}
+      DATABASE_URL: postgres://openduck:openduck@localhost:5433/openduck_meta
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install postgres client + duckdb cli
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client duckdb
+
+      - name: Run Linux FUSE snapshot e2e
+        run: ./scripts/e2e_fuse_snapshot_linux.sh

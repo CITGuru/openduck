@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: false
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: openduck
+          POSTGRES_PASSWORD: openduck
+          POSTGRES_DB: openduck_meta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Migrate database
+        env:
+          DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
+          PGPASSWORD: openduck
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          until pg_isready -h localhost -p 5432 -U openduck; do sleep 1; done
+          for f in $(ls crates/diff-metadata/migrations/*.sql 2>/dev/null | sort); do
+            psql -v ON_ERROR_STOP=1 "postgresql://openduck:openduck@localhost:5432/openduck_meta" -f "$f"
+          done
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        env:
+          DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        env:
+          DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
+        run: cargo test --workspace
+
+  # Optional: FUSE e2e needs /dev/fuse + privileged runners (see docs/macFUSE.md).
+  fuse-e2e-linux:
+    runs-on: ubuntu-latest
+    if: ${{ false }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "Enable when CI provides FUSE device / priv mode"

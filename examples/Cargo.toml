@@ -1,0 +1,66 @@
+[package]
+name = "openduck-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[example]]
+name = "grpc_roundtrip"
+path = "grpc_roundtrip.rs"
+
+[[example]]
+name = "storage_backend"
+path = "storage_backend.rs"
+
+[[example]]
+name = "hybrid_plan"
+path = "hybrid_plan.rs"
+
+[[example]]
+name = "client_rust"
+path = "client_rust.rs"
+
+[[example]]
+name = "diff_storage_demo"
+path = "diff_storage_demo.rs"
+
+[[example]]
+name = "worker_custom"
+path = "worker_custom.rs"
+
+[[example]]
+name = "fuse_concept"
+path = "fuse_concept.rs"
+
+[[example]]
+name = "secrets_and_storage"
+path = "secrets_and_storage.rs"
+
+[[example]]
+name = "bridge_storage"
+path = "bridge_storage.rs"
+
+[[example]]
+name = "hybrid_execution"
+path = "hybrid_execution.rs"
+
+[[example]]
+name = "snapshot_reads"
+path = "snapshot_reads.rs"
+
+[dependencies]
+exec-worker = { path = "../crates/exec-worker" }
+exec-gateway = { path = "../crates/exec-gateway" }
+exec-proto = { path = "../crates/exec-proto" }
+diff-core = { path = "../crates/diff-core" }
+diff-metadata = { path = "../crates/diff-metadata" }
+diff-bridge = { path = "../crates/diff-bridge" }
+openduck-metrics = { path = "../crates/openduck-metrics" }
+duckdb = { version = "1.10501", features = ["bundled"] }
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+tempfile = "3"

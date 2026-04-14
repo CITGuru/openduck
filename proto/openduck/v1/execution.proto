@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package openduck.v1;
+
+// OpenDuck execution service (v1). Messages will evolve; bump package or use versioned service names.
+
+service ExecutionService {
+  // Execute a remote plan fragment; stream result batches (Arrow IPC bytes).
+  rpc ExecuteFragment(ExecuteFragmentRequest) returns (stream ExecuteFragmentChunk);
+  rpc CancelExecution(CancelRequest) returns (CancelReply);
+}
+
+message ExecuteFragmentRequest {
+  // Serialized plan IR or opaque DuckDB fragment (versioned by consumer).
+  // M2: UTF-8 SQL string. M3: structured IR with per-operator placement (local / remote).
+  bytes plan = 1;
+  string database = 2;
+  // Snapshot / consistency token for differential storage reads.
+  optional string snapshot_id = 3;
+  // Bearer-style auth; clients should prefer OPENDUCK_TOKEN via channel creds in production.
+  string access_token = 4;
+  // Client or gateway assigned execution id for cancel routing.
+  string execution_id = 5;
+}
+
+message ExecuteFragmentChunk {
+  oneof payload {
+    ArrowIpcBatch arrow_batch = 1;
+    string error = 2;
+    bool finished = 3;
+  }
+}
+
+message ArrowIpcBatch {
+  bytes ipc_stream_payload = 1;
+}
+
+message CancelRequest {
+  string execution_id = 1;
+}
+
+message CancelReply {
+  bool acknowledged = 1;
+}

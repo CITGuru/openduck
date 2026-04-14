@@ -1,0 +1,18 @@
+[package]
+name = "openduck"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OpenDuck — unified CLI for running gateway + worker services"
+
+[[bin]]
+name = "openduck"
+path = "src/main.rs"
+
+[dependencies]
+exec-gateway = { path = "../exec-gateway" }
+exec-worker  = { path = "../exec-worker" }
+clap = { version = "4", features = ["derive", "env"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

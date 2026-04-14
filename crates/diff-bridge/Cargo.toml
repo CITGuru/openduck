@@ -1,0 +1,23 @@
+[package]
+name = "diff-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+diff-core = { path = "../diff-core" }
+diff-metadata = { path = "../diff-metadata" }
+diff-layer-fs = { path = "../diff-layer-fs" }
+diff-blob = { path = "../diff-blob" }
+openduck-metrics = { path = "../openduck-metrics" }
+tokio.workspace = true
+sqlx.workspace = true
+bytes.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+uuid = { workspace = true }
