@@ -41,14 +41,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dir = tempfile::tempdir()?;
     let db_name = format!("bridge_example_{}", uuid::Uuid::new_v4());
-    println!("1. Opening bridge: db={db_name}, data_dir={}", dir.path().display());
+    println!(
+        "1. Opening bridge: db={db_name}, data_dir={}",
+        dir.path().display()
+    );
 
     let c_db = CString::new(db_name)?;
     let c_pg = CString::new(pg_url)?;
     let c_dir = CString::new(dir.path().to_str().unwrap())?;
 
     unsafe {
-        let handle = diff_bridge::openduck_bridge_open(c_db.as_ptr(), c_pg.as_ptr(), c_dir.as_ptr());
+        let handle =
+            diff_bridge::openduck_bridge_open(c_db.as_ptr(), c_pg.as_ptr(), c_dir.as_ptr());
         if handle.is_null() {
             let err = diff_bridge::openduck_bridge_last_error();
             let msg = if err.is_null() {
@@ -102,9 +106,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut verify = vec![0u8; 4096];
         diff_bridge::openduck_bridge_read(handle, 0, verify.as_mut_ptr(), 4096);
-        assert!(verify[..256].iter().all(|&b| b == 0x42), "prefix should be 0x42");
-        assert!(verify[256..768].iter().all(|&b| b == 0xFF), "patched range should be 0xFF");
-        assert!(verify[768..].iter().all(|&b| b == 0x42), "suffix should be 0x42");
+        assert!(
+            verify[..256].iter().all(|&b| b == 0x42),
+            "prefix should be 0x42"
+        );
+        assert!(
+            verify[256..768].iter().all(|&b| b == 0xFF),
+            "patched range should be 0xFF"
+        );
+        assert!(
+            verify[768..].iter().all(|&b| b == 0x42),
+            "suffix should be 0x42"
+        );
         println!("   Verified: overlay read resolves correctly (newest write wins).\n");
 
         // Clean up

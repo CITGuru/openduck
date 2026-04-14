@@ -52,7 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let frozen = backend.read(
         LogicalRange { offset: 0, len: 16 },
-        ReadContext { snapshot_id: Some(snap_v1) },
+        ReadContext {
+            snapshot_id: Some(snap_v1),
+        },
     )?;
 
     println!("   Tip (latest):     {:?}", std::str::from_utf8(&tip)?);
@@ -70,15 +72,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let v1 = backend.read(
         LogicalRange { offset: 0, len: 16 },
-        ReadContext { snapshot_id: Some(snap_v1) },
+        ReadContext {
+            snapshot_id: Some(snap_v1),
+        },
     )?;
     let v2 = backend.read(
         LogicalRange { offset: 0, len: 16 },
-        ReadContext { snapshot_id: Some(snap_v2) },
+        ReadContext {
+            snapshot_id: Some(snap_v2),
+        },
     )?;
     let v3 = backend.read(
         LogicalRange { offset: 0, len: 16 },
-        ReadContext { snapshot_id: Some(snap_v3) },
+        ReadContext {
+            snapshot_id: Some(snap_v3),
+        },
     )?;
 
     println!("   v1: {:?}", std::str::from_utf8(&v1)?);
@@ -96,13 +104,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ReadContext { snapshot_id: None },
     )?;
     let written = sparse.read(
-        LogicalRange { offset: 100, len: 18 },
+        LogicalRange {
+            offset: 100,
+            len: 18,
+        },
         ReadContext { snapshot_id: None },
     )?;
 
     println!("   Wrote 'data at offset 100' at offset 100");
     println!("   Hole (offset 0..4): {:?}", &hole[..]);
-    println!("   Data (offset 100..118): {:?}\n", std::str::from_utf8(&written)?);
+    println!(
+        "   Data (offset 100..118): {:?}\n",
+        std::str::from_utf8(&written)?
+    );
 
     // ── 7. Large sequential writes ──────────────────────────────────────────
     println!("── 7. Large sequential writes ──");
@@ -116,11 +130,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let snap = large.seal()?;
     let sample = large.read(
-        LogicalRange { offset: 8192, len: 4 },
-        ReadContext { snapshot_id: Some(snap) },
+        LogicalRange {
+            offset: 8192,
+            len: 4,
+        },
+        ReadContext {
+            snapshot_id: Some(snap),
+        },
     )?;
     println!("   Wrote 10 x 4KB blocks (40KB total)");
-    println!("   Sealed and read back 4 bytes at offset 8192: {:?}", &sample[..]);
+    println!(
+        "   Sealed and read back 4 bytes at offset 8192: {:?}",
+        &sample[..]
+    );
     println!("   → This is the pattern DuckDB uses when writing pages through FUSE\n");
 
     println!("=== Done ===");

@@ -6,10 +6,7 @@ use uuid::Uuid;
 use crate::MetadataError;
 
 /// Increment `ref_count` for a layer referenced by a new snapshot.
-pub async fn increment_layer_ref(
-    pool: &PgPool,
-    layer_id: Uuid,
-) -> Result<(), MetadataError> {
+pub async fn increment_layer_ref(pool: &PgPool, layer_id: Uuid) -> Result<(), MetadataError> {
     sqlx::query(r#"UPDATE openduck_layer SET ref_count = ref_count + 1 WHERE id = $1"#)
         .bind(layer_id)
         .execute(pool)
@@ -18,22 +15,18 @@ pub async fn increment_layer_ref(
 }
 
 /// Decrement `ref_count` for a layer when a snapshot is dropped.
-pub async fn decrement_layer_ref(
-    pool: &PgPool,
-    layer_id: Uuid,
-) -> Result<(), MetadataError> {
-    sqlx::query(r#"UPDATE openduck_layer SET ref_count = GREATEST(ref_count - 1, 0) WHERE id = $1"#)
-        .bind(layer_id)
-        .execute(pool)
-        .await?;
+pub async fn decrement_layer_ref(pool: &PgPool, layer_id: Uuid) -> Result<(), MetadataError> {
+    sqlx::query(
+        r#"UPDATE openduck_layer SET ref_count = GREATEST(ref_count - 1, 0) WHERE id = $1"#,
+    )
+    .bind(layer_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 /// Return sealed layers with zero references for the given database (GC candidates).
-pub async fn gc_candidates(
-    pool: &PgPool,
-    db_id: Uuid,
-) -> Result<Vec<GcLayerRow>, MetadataError> {
+pub async fn gc_candidates(pool: &PgPool, db_id: Uuid) -> Result<Vec<GcLayerRow>, MetadataError> {
     let rows = sqlx::query_as::<_, GcLayerRow>(
         r#"SELECT id, storage_uri FROM openduck_layer
            WHERE db_id = $1 AND status = 'sealed' AND ref_count = 0

@@ -26,7 +26,10 @@ fn main() {
 
     println!("OpenDuck query latency benchmark");
     println!("  warmup={warmup}, iters={iters}");
-    println!("{:<20} {:>12} {:>12} {:>12}", "query", "min_us", "avg_us", "max_us");
+    println!(
+        "{:<20} {:>12} {:>12} {:>12}",
+        "query", "min_us", "avg_us", "max_us"
+    );
     println!("{}", "-".repeat(60));
 
     let conn = Connection::open_in_memory().expect("open duckdb");

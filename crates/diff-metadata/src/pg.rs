@@ -103,13 +103,12 @@ pub async fn release_write_lease(
     db_id: Uuid,
     holder: &str,
 ) -> Result<bool, MetadataError> {
-    let result = sqlx::query(
-        r#"DELETE FROM openduck_write_lease WHERE db_id = $1 AND holder = $2"#,
-    )
-    .bind(db_id)
-    .bind(holder)
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query(r#"DELETE FROM openduck_write_lease WHERE db_id = $1 AND holder = $2"#)
+            .bind(db_id)
+            .bind(holder)
+            .execute(pool)
+            .await?;
     Ok(result.rows_affected() > 0)
 }
 

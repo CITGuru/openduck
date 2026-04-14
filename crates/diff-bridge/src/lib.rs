@@ -51,8 +51,7 @@ pub unsafe extern "C" fn openduck_bridge_open(
 
     let bootstrap_result = rt.block_on(async {
         let pool = sqlx::PgPool::connect(postgres_url).await?;
-        diff_metadata::bootstrap_openduck_database(&pool, db_name, &data_dir_path)
-            .await
+        diff_metadata::bootstrap_openduck_database(&pool, db_name, &data_dir_path).await
     });
     if let Err(e) = bootstrap_result {
         return set_error_null(&format!("bootstrap: {e}"));
@@ -119,10 +118,7 @@ pub unsafe extern "C" fn openduck_bridge_read(
     len: u64,
 ) -> i32 {
     let h = &*handle;
-    let range = LogicalRange {
-        offset,
-        len,
-    };
+    let range = LogicalRange { offset, len };
     match h.backend.read(range, ReadContext { snapshot_id: None }) {
         Ok(bytes) => {
             let copy_len = bytes.len().min(len as usize);

@@ -44,7 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         // 1. Open a read-write handle
         println!("1. Opening R/W handle: db={db_name}");
-        let handle = diff_bridge::openduck_bridge_open(c_db.as_ptr(), c_pg.as_ptr(), c_dir.as_ptr());
+        let handle =
+            diff_bridge::openduck_bridge_open(c_db.as_ptr(), c_pg.as_ptr(), c_dir.as_ptr());
         if handle.is_null() {
             return Err(format!("open failed: {:?}", last_error()).into());
         }

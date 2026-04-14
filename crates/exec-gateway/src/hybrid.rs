@@ -153,7 +153,10 @@ fn explain_recursive(node: &PlanNode, depth: usize, out: &mut String) {
         NodeKind::RunHint { placement, .. } => format!("RunHint({placement})"),
         NodeKind::RemoteSql { sql } => format!("RemoteSQL({sql})"),
     };
-    out.push_str(&format!("{indent}[{placement}] {label}\n", placement = node.placement));
+    out.push_str(&format!(
+        "{indent}[{placement}] {label}\n",
+        placement = node.placement
+    ));
     for c in &node.children {
         explain_recursive(c, depth + 1, out);
     }
@@ -236,7 +239,14 @@ pub fn parse_compound_hint(sql: &str) -> Option<PlanNode> {
     let idx = lower.find("openduck_run(")?;
     let inner_hint = &sql[idx..];
 
-    let inner_node = parse_openduck_run(inner_hint.split(')').next().map(|s| format!("{s})")).unwrap_or_default().as_str())?;
+    let inner_node = parse_openduck_run(
+        inner_hint
+            .split(')')
+            .next()
+            .map(|s| format!("{s})"))
+            .unwrap_or_default()
+            .as_str(),
+    )?;
 
     let outer_placement = if lower.starts_with("openduck_run(") {
         if let Some(node) = parse_openduck_run(sql) {
@@ -310,11 +320,7 @@ async fn collect_remote_batches(
         .into_inner();
 
     let mut batches = Vec::new();
-    while let Some(chunk) = stream
-        .message()
-        .await
-        .map_err(|e| format!("stream: {e}"))?
-    {
+    while let Some(chunk) = stream.message().await.map_err(|e| format!("stream: {e}"))? {
         match chunk.payload {
             Some(Payload::ArrowBatch(b)) if !b.ipc_stream_payload.is_empty() => {
                 let cursor = std::io::Cursor::new(b.ipc_stream_payload);
@@ -339,8 +345,10 @@ fn materialize_batches(
     batches: &[RecordBatch],
 ) -> Result<(), String> {
     if batches.is_empty() {
-        conn.execute_batch(&format!("CREATE TEMP TABLE {table_name} AS SELECT 1 WHERE false"))
-            .map_err(|e| format!("create empty temp table: {e}"))?;
+        conn.execute_batch(&format!(
+            "CREATE TEMP TABLE {table_name} AS SELECT 1 WHERE false"
+        ))
+        .map_err(|e| format!("create empty temp table: {e}"))?;
         return Ok(());
     }
 
@@ -453,7 +461,12 @@ mod tests {
         let result = insert_bridges(join);
         assert_eq!(result.children.len(), 2);
         assert!(
-            matches!(&result.children[1].kind, NodeKind::Bridge { direction: BridgeDirection::RemoteToLocal }),
+            matches!(
+                &result.children[1].kind,
+                NodeKind::Bridge {
+                    direction: BridgeDirection::RemoteToLocal
+                }
+            ),
             "expected bridge at L/R boundary"
         );
     }

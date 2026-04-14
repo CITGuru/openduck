@@ -493,28 +493,22 @@ impl PgStorageBackend {
         openduck_metrics::record_layer_seal_ms(started.elapsed().as_secs_f64() * 1000.0);
 
         if let Some(store) = &self.blob_store {
-            let sealed_path = resolve_path(&self.data_dir, &format!(
-                "{}/active-{sealed_layer_id}.layer",
-                self.db_id,
-            ));
+            let sealed_path = resolve_path(
+                &self.data_dir,
+                &format!("{}/active-{sealed_layer_id}.layer", self.db_id,),
+            );
             if sealed_path.exists() {
                 if let Ok(data) = std::fs::read(&sealed_path) {
                     let key = format!("{}/{sealed_layer_id}.layer", self.db_id);
-                    let uri = diff_blob::put_layer_bytes(
-                        store.as_ref(),
-                        &key,
-                        Bytes::from(data),
-                    )
-                    .await
-                    .map_err(|e| DiffCoreError::Storage(format!("blob upload: {e}")))?;
-                    sqlx::query(
-                        r#"UPDATE openduck_layer SET storage_uri = $1 WHERE id = $2"#,
-                    )
-                    .bind(&uri)
-                    .bind(sealed_layer_id)
-                    .execute(&self.pool)
-                    .await
-                    .map_err(Self::meta_err)?;
+                    let uri = diff_blob::put_layer_bytes(store.as_ref(), &key, Bytes::from(data))
+                        .await
+                        .map_err(|e| DiffCoreError::Storage(format!("blob upload: {e}")))?;
+                    sqlx::query(r#"UPDATE openduck_layer SET storage_uri = $1 WHERE id = $2"#)
+                        .bind(&uri)
+                        .bind(sealed_layer_id)
+                        .execute(&self.pool)
+                        .await
+                        .map_err(Self::meta_err)?;
                 }
             }
         }

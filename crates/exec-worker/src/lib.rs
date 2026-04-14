@@ -39,9 +39,7 @@ pub enum StorageMode {
     /// Mount via FUSE, open the mounted path. The caller must ensure
     /// `openduck-fuse` is already running at the given mountpoint.
     /// Linux only.
-    Fuse {
-        mountpoint: PathBuf,
-    },
+    Fuse { mountpoint: PathBuf },
     /// In-process persistent storage at `data_dir/{db_name}.duckdb`.
     /// Cross-platform, no FUSE mount required. The worker opens a real
     /// DuckDB file at a deterministic path under `data_dir`.

@@ -18,11 +18,7 @@ use exec_proto::openduck::v1::ExecuteFragmentRequest;
 use exec_worker::WorkerConfig;
 use tonic::Request;
 
-async fn send_query(
-    addr: &str,
-    sql: &str,
-    token: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn send_query(addr: &str, sql: &str, token: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = ExecutionServiceClient::connect(addr.to_string()).await?;
 
     let request = ExecuteFragmentRequest {
@@ -128,17 +124,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ducklake_data_path: Some("s3://my-bucket/ducklake/".into()),
         ..Default::default()
     };
-    println!("   metadata:  {}", ducklake_config.ducklake_metadata.as_ref().unwrap());
-    println!("   data_path: {}", ducklake_config.ducklake_data_path.as_ref().unwrap());
+    println!(
+        "   metadata:  {}",
+        ducklake_config.ducklake_metadata.as_ref().unwrap()
+    );
+    println!(
+        "   data_path: {}",
+        ducklake_config.ducklake_data_path.as_ref().unwrap()
+    );
     println!("   (skipping startup — requires running Postgres + S3)\n");
 
     // ── 4. Gateway with multiple workers ────────────────────────────────────
     println!("── 4. Gateway routing across workers ──");
     let gw_addr: SocketAddr = "127.0.0.1:19003".parse()?;
-    let workers = vec![
-        format!("http://{addr}"),
-        format!("http://{addr2}"),
-    ];
+    let workers = vec![format!("http://{addr}"), format!("http://{addr2}")];
     println!("   Workers: {:?}", workers);
 
     tokio::spawn(async move {

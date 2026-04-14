@@ -27,7 +27,11 @@ fn bridge_write_read_roundtrip() {
 
     unsafe {
         let handle = openduck_bridge_open(db_name.as_ptr(), pg_url.as_ptr(), data_dir.as_ptr());
-        assert!(!handle.is_null(), "open failed: {:?}", bridge_last_error_str());
+        assert!(
+            !handle.is_null(),
+            "open failed: {:?}",
+            bridge_last_error_str()
+        );
 
         let write_data: Vec<u8> = (0..=255u8).collect();
         let rc = openduck_bridge_write(handle, 0, write_data.as_ptr(), write_data.len() as u64);
@@ -72,9 +76,18 @@ fn bridge_overwrite_and_read() {
         let mut buf = vec![0u8; 128];
         openduck_bridge_read(handle, 0, buf.as_mut_ptr(), 128);
 
-        assert!(buf[0..32].iter().all(|&b| b == 0xAA), "first 32 bytes should be 0xAA");
-        assert!(buf[32..96].iter().all(|&b| b == 0xBB), "overwritten range should be 0xBB");
-        assert!(buf[96..128].iter().all(|&b| b == 0xAA), "tail should be 0xAA");
+        assert!(
+            buf[0..32].iter().all(|&b| b == 0xAA),
+            "first 32 bytes should be 0xAA"
+        );
+        assert!(
+            buf[32..96].iter().all(|&b| b == 0xBB),
+            "overwritten range should be 0xBB"
+        );
+        assert!(
+            buf[96..128].iter().all(|&b| b == 0xAA),
+            "tail should be 0xAA"
+        );
 
         openduck_bridge_close(handle);
     }

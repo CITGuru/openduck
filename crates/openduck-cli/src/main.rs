@@ -70,7 +70,11 @@ enum Commands {
         listen: String,
 
         /// Comma-separated worker addresses
-        #[arg(long, env = "OPENDUCK_WORKER_ADDRS", default_value = "http://127.0.0.1:9898")]
+        #[arg(
+            long,
+            env = "OPENDUCK_WORKER_ADDRS",
+            default_value = "http://127.0.0.1:9898"
+        )]
         workers: String,
     },
 
@@ -159,9 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match cli.command {
-        Some(Commands::Gateway { listen, workers }) => {
-            run_gateway(&listen, &workers).await
-        }
+        Some(Commands::Gateway { listen, workers }) => run_gateway(&listen, &workers).await,
         Some(Commands::Worker {
             listen,
             db,
@@ -176,9 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| e.to_string())?;
             run_worker(&listen, db, mode, ducklake_metadata, ducklake_data).await
         }
-        None => {
-            run_serve(cli).await
-        }
+        None => run_serve(cli).await,
     }
 }
 

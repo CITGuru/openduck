@@ -58,13 +58,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Page 0 header: {:?}", std::str::from_utf8(&h)?);
 
     let p1 = backend.read(
-        LogicalRange { offset: page_size as u64, len: 11 },
+        LogicalRange {
+            offset: page_size as u64,
+            len: 11,
+        },
         ReadContext { snapshot_id: None },
     )?;
     println!("   Page 1 data:   {:?}", std::str::from_utf8(&p1)?);
 
     let p2 = backend.read(
-        LogicalRange { offset: 2 * page_size as u64, len: 12 },
+        LogicalRange {
+            offset: 2 * page_size as u64,
+            len: 12,
+        },
         ReadContext { snapshot_id: None },
     )?;
     println!("   Page 2 data:   {:?}\n", std::str::from_utf8(&p2)?);
@@ -92,12 +98,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("── Snapshot isolation ──");
 
     let v1_page1 = backend.read(
-        LogicalRange { offset: page_size as u64, len: 18 },
-        ReadContext { snapshot_id: Some(snap_v1) },
+        LogicalRange {
+            offset: page_size as u64,
+            len: 18,
+        },
+        ReadContext {
+            snapshot_id: Some(snap_v1),
+        },
     )?;
     let v2_page1 = backend.read(
-        LogicalRange { offset: page_size as u64, len: 18 },
-        ReadContext { snapshot_id: Some(snap_v2) },
+        LogicalRange {
+            offset: page_size as u64,
+            len: 18,
+        },
+        ReadContext {
+            snapshot_id: Some(snap_v2),
+        },
     )?;
 
     println!("   v1 page 1: {:?}", std::str::from_utf8(&v1_page1)?);

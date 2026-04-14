@@ -36,8 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Connect as a gRPC client.
-    let mut client =
-        ExecutionServiceClient::connect(format!("http://{gateway_addr}")).await?;
+    let mut client = ExecutionServiceClient::connect(format!("http://{gateway_addr}")).await?;
 
     let sql = "SELECT i AS id, i * 10 AS value FROM range(5) t(i)";
     println!("=> Sending SQL: {sql}");
@@ -89,7 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client.execute_fragment(Request::new(bad_request)).await {
         Ok(_) => println!("   Unexpected success (OPENDUCK_TOKEN may be unset — dev mode)"),
         Err(status) => {
-            println!("   Rejected as expected: code={}, message={}", status.code(), status.message());
+            println!(
+                "   Rejected as expected: code={}, message={}",
+                status.code(),
+                status.message()
+            );
         }
     }
 
@@ -104,7 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match client.execute_fragment(Request::new(empty_request)).await {
         Ok(_) => println!("   Unexpected success (OPENDUCK_TOKEN may be unset — dev mode)"),
         Err(status) => {
-            println!("   Rejected as expected: code={}, message={}", status.code(), status.message());
+            println!(
+                "   Rejected as expected: code={}, message={}",
+                status.code(),
+                status.message()
+            );
         }
     }
 

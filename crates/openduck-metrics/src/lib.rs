@@ -22,11 +22,8 @@ pub fn init_metrics() {
                 .with_tonic()
                 .build()
             {
-                let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
-                    .build();
-                let provider = SdkMeterProvider::builder()
-                    .with_reader(reader)
-                    .build();
+                let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter).build();
+                let provider = SdkMeterProvider::builder().with_reader(reader).build();
                 global::set_meter_provider(provider);
                 tracing::info!("openduck-metrics: OTLP meter provider installed");
             }
