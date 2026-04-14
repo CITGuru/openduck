@@ -19,6 +19,7 @@ for f in crates/diff-metadata/migrations/*.sql; do psql "$DATABASE_URL" -f "$f";
 |---------|---------------|-----|
 | `client_rust` | DuckDB Rust client — queries, aggregation, Arrow batches, transactions, hybrid joins | `cargo run --example client_rust` |
 | `client_python.py` | Python client — all connection methods, pandas/Arrow, hybrid queries | `python examples/client_python.py` |
+| `python/duckdb_sdk_ducklake.py` | DuckDB Python SDK + DuckLake — local lakehouse, remote gateway, hybrid joins | `python examples/python/duckdb_sdk_ducklake.py local` |
 
 ### Rust quick start
 
@@ -79,6 +80,16 @@ duckdb -unsigned -c "
 ### `client_rust` — DuckDB client usage
 
 Shows 11 patterns: version check, LOAD + ATTACH, query + fetch, aggregation, Arrow result batches, hybrid local+remote join, CSV loading, multiple attached databases, parameterized queries, transactions, and error handling.
+
+### `python/duckdb_sdk_ducklake.py` — DuckDB Python SDK + DuckLake
+
+Five self-contained sections (run individually or all at once):
+
+1. **`remote`** — DuckDB Python SDK with the openduck extension: `LOAD`, `ATTACH`, query remote tables, fetch as pandas/Arrow
+2. **`local`** — DuckLake in-process with no server: create tables, insert data, aggregation, JOINs, snapshots (time travel), pandas/Arrow export
+3. **`hybrid`** — Attach both a local DuckLake catalog and a remote OpenDuck gateway in the same connection, then cross-catalog JOIN
+4. **`wrapper`** — Same as #1 but using the `openduck` Python package (handles extension loading and `ATTACH` automatically)
+5. **`worker`** — Documents how to start a DuckLake-backed OpenDuck worker (Postgres metadata + S3 data) and query it from any client
 
 ### `diff_storage_demo` — Differential storage internals
 

@@ -7,22 +7,12 @@ MotherDuck showed that DuckDB can work beautifully in the cloud: `ATTACH 'md:myd
 ```python
 import duckdb
 
-con = duckdb.connect()
-con.execute("LOAD 'openduck';")
+con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
+con.execute("LOAD '/path/to/openduck.duckdb_extension';")
 con.execute("ATTACH 'openduck:mydb?endpoint=http://localhost:7878&token=xxx' AS cloud;")
 
 con.sql("SELECT * FROM cloud.users").show()                    # remote, transparent
 con.sql("SELECT * FROM local.t JOIN cloud.t2 ON ...").show()   # hybrid, one query
-
-# direct connect using openduck python library
-
-con = openduck.connect("od:mydb")
-con = openduck.connect("openduck:myd")
-
-# direct connect using duckb (TODO: needs duckdb to autoload openduck the same way motherduck works today)
-
-con = duckdb.connect("od:mydb")
-con = duckdb.connect("openduck:myd")
 ```
 
 ## What OpenDuck does
@@ -92,23 +82,99 @@ Because the protocol is open and simple, you're not locked into a single backend
 
 ## Quick start
 
+### 1. Build the backend
+
 ```bash
-# Backend
 cargo build --workspace
-cargo run -p openduck -- serve -d mydb -t your-token
+```
 
-# Extension (requires vcpkg — see extensions/openduck/README.md)
+### 2. Build the DuckDB extension
+
+The openduck extension is not yet published to DuckDB's extension repository, so you need to build it from source. See [`extensions/openduck/README.md`](extensions/openduck/README.md) for full prerequisites (vcpkg, bison on macOS).
+
+```bash
 cd extensions/openduck && make
+```
 
-# Python client
+This produces the loadable binary at:
+
+```
+extensions/openduck/build/release/extension/openduck/openduck.duckdb_extension
+```
+
+### 3. Start the server
+
+```bash
+export OPENDUCK_TOKEN=your-token
+cargo run -p openduck -- serve -d mydb -t your-token
+```
+
+### 4. Connect
+
+Because the extension is unsigned, every DuckDB connection needs `allow_unsigned_extensions` enabled and an explicit `LOAD` with the full path to the built binary.
+
+**Python (DuckDB SDK directly):**
+
+```python
+import duckdb
+
+con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
+con.execute("LOAD 'extensions/openduck/build/release/extension/openduck/openduck.duckdb_extension';")
+con.execute("ATTACH 'openduck:mydb?endpoint=http://localhost:7878&token=your-token' AS cloud;")
+
+con.sql("SELECT * FROM cloud.users LIMIT 10").show()
+```
+
+You can also set `OPENDUCK_EXTENSION_PATH` to avoid hard-coding the path:
+
+```bash
+export OPENDUCK_EXTENSION_PATH=extensions/openduck/build/release/extension/openduck/openduck.duckdb_extension
+```
+
+**Python (openduck wrapper — auto-detects the local build):**
+
+```bash
 pip install -e clients/python
 export OPENDUCK_TOKEN=your-token
-python -c "
+```
+
+```python
 import openduck
-con = openduck.connect('mydb')
-con.sql('SELECT 1 AS x').show()
+
+con = openduck.connect("mydb")
+con.sql("SELECT 1 AS x").show()
+```
+
+The wrapper finds the extension automatically from the build tree or `OPENDUCK_EXTENSION_PATH`.
+
+**CLI:**
+
+```bash
+duckdb -unsigned -c "
+  LOAD 'extensions/openduck/build/release/extension/openduck/openduck.duckdb_extension';
+  ATTACH 'openduck:mydb?token=your-token' AS cloud;
+  SELECT * FROM cloud.users LIMIT 10;
 "
 ```
+
+**Rust:**
+
+```rust
+use duckdb::Connection;
+
+let conn = Connection::open_in_memory()?;
+conn.execute_batch(r"
+    SET allow_unsigned_extensions = true;
+    LOAD 'extensions/openduck/build/release/extension/openduck/openduck.duckdb_extension';
+    ATTACH 'openduck:mydb?endpoint=http://localhost:7878&token=xxx' AS cloud;
+")?;
+
+let mut stmt = conn.prepare("SELECT * FROM cloud.users LIMIT 10")?;
+```
+
+> **Note:** Once the extension is published to the DuckDB extension repository, `INSTALL openduck; LOAD openduck;` will work without building from source or enabling unsigned extensions.
+
+See [`examples/python/duckdb_sdk_ducklake.py`](examples/python/duckdb_sdk_ducklake.py) for a comprehensive walkthrough including DuckLake integration and hybrid local+remote queries.
 
 ## Layout
 
@@ -163,6 +229,25 @@ Arrow Flight SQL is a generic database protocol — "JDBC/ODBC over Arrow." Open
 | **Protocol surface** | ~15 RPCs                        | 2 RPCs                                       |
 | **Plan format**      | SQL only                        | SQL (M2), structured plan IR (M3)            |
 | **Optimizer**        | Client-side, unaware            | DuckDB optimizer sees remote tables natively |
+
+
+## OpenDuck vs DuckLake
+
+OpenDuck doesn't replace DuckLake — you use them together. They operate at different layers entirely.
+
+DuckLake is a **lakehouse catalog**: it manages tables as Parquet files in object storage with transactional metadata in Postgres (or SQLite/DuckDB). It decides *where data lives* and *how tables are organized*.
+
+OpenDuck is a **storage and execution layer** for DuckDB's own compute engine. It provides differential storage (append-only layers with snapshot isolation), hybrid query execution (split a single query across local and remote), and transparent remote attach (`ATTACH 'openduck:mydb'`).
+
+If you're using DuckLake but still fall back to a `.duckdb` file for things DuckLake doesn't support yet (e.g. indexes, full-text search, or workloads that need DuckDB-native storage), OpenDuck makes that file concurrency-safe with snapshot isolation. And when you want to query a DuckLake catalog running on a remote server, OpenDuck is the transport — a worker backed by DuckLake serves queries over gRPC, and clients attach via the openduck extension without knowing or caring what the backend storage is.
+
+|                      | DuckLake                              | OpenDuck                                    |
+| -------------------- | ------------------------------------- | ------------------------------------------- |
+| **Layer**            | Catalog (table → Parquet in S3)       | Storage + execution (DuckDB file I/O, gRPC) |
+| **What it manages**  | Table metadata, Parquet data files    | DuckDB pages, layers, snapshots             |
+| **Concurrency**      | Parquet files are immutable           | Snapshot isolation on `.duckdb` files        |
+| **Remote access**    | Not built-in                          | `ATTACH 'openduck:...'` + hybrid execution  |
+| **Together**         | DuckLake catalog on a remote worker → OpenDuck streams results to the client |
 
 
 ## Acknowledgments
