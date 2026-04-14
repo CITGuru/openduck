@@ -49,6 +49,14 @@ path = "hybrid_execution.rs"
 name = "snapshot_reads"
 path = "snapshot_reads.rs"
 
+[[example]]
+name = "compute_pushdown"
+path = "compute_pushdown.rs"
+
+[[example]]
+name = "worker_registration"
+path = "worker_registration.rs"
+
 [dependencies]
 exec-worker = { path = "../crates/exec-worker" }
 exec-gateway = { path = "../crates/exec-gateway" }

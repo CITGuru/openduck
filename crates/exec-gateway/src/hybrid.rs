@@ -315,10 +315,7 @@ pub fn resolve_auto_with_registry(
 ///    the SQL to execute on that context — this is the largest possible
 ///    pushdown.
 /// 3. If no, recurse into children and try to collapse them individually.
-pub fn pushdown_federable_subplans(
-    root: &mut PlanNode,
-    registry: &TableSourceRegistry,
-) {
+pub fn pushdown_federable_subplans(root: &mut PlanNode, registry: &TableSourceRegistry) {
     *root = pushdown_recursive_owned(root.clone(), registry);
 }
 
@@ -326,9 +323,7 @@ pub fn pushdown_federable_subplans(
 /// remote compute context, `None` otherwise.
 fn subplan_context(node: &PlanNode, registry: &TableSourceRegistry) -> Option<String> {
     match &node.kind {
-        NodeKind::Scan { table } => registry
-            .get(table)
-            .map(|s| s.compute_context.clone()),
+        NodeKind::Scan { table } => registry.get(table).map(|s| s.compute_context.clone()),
         NodeKind::Bridge { .. } | NodeKind::RunHint { .. } => None,
         NodeKind::RemoteSql { .. } => None,
         _ => {
@@ -357,7 +352,10 @@ fn node_to_sql(node: &PlanNode) -> String {
         NodeKind::Scan { table } => format!("SELECT * FROM {table}"),
         NodeKind::Filter { predicate } => {
             if let Some(child) = node.children.first() {
-                format!("SELECT * FROM ({}) _f WHERE {predicate}", node_to_sql(child))
+                format!(
+                    "SELECT * FROM ({}) _f WHERE {predicate}",
+                    node_to_sql(child)
+                )
             } else {
                 format!("SELECT * WHERE {predicate}")
             }
@@ -382,16 +380,8 @@ fn node_to_sql(node: &PlanNode) -> String {
             }
         }
         NodeKind::HashJoin { condition } => {
-            let left = node
-                .children
-                .first()
-                .map(node_to_sql)
-                .unwrap_or_default();
-            let right = node
-                .children
-                .get(1)
-                .map(node_to_sql)
-                .unwrap_or_default();
+            let left = node.children.first().map(node_to_sql).unwrap_or_default();
+            let right = node.children.get(1).map(node_to_sql).unwrap_or_default();
             format!("SELECT * FROM ({left}) _l JOIN ({right}) _r ON {condition}")
         }
         NodeKind::RemoteSql { sql } => sql.clone(),
@@ -403,8 +393,10 @@ fn node_to_sql(node: &PlanNode) -> String {
 fn pushdown_recursive_owned(node: PlanNode, registry: &TableSourceRegistry) -> PlanNode {
     // If this entire subtree is in one context, collapse it now (top-down
     // "largest subplan first" strategy).
-    if !matches!(node.kind, NodeKind::RemoteSql { .. } | NodeKind::Bridge { .. } | NodeKind::RunHint { .. })
-        && subplan_context(&node, registry).is_some()
+    if !matches!(
+        node.kind,
+        NodeKind::RemoteSql { .. } | NodeKind::Bridge { .. } | NodeKind::RunHint { .. }
+    ) && subplan_context(&node, registry).is_some()
     {
         let sql = node_to_sql(&node);
         if !sql.is_empty() {
@@ -581,8 +573,7 @@ async fn collect_remote_batches(
                 let reader = StreamReader::try_new(cursor, None)
                     .map_err(|e| HybridError::DataError(format!("arrow decode: {e}")))?;
                 for batch in reader {
-                    batches
-                        .push(batch.map_err(|e| HybridError::DataError(format!("arrow: {e}")))?);
+                    batches.push(batch.map_err(|e| HybridError::DataError(format!("arrow: {e}")))?);
                 }
             }
             Some(Payload::Error(e)) => return Err(HybridError::WorkerError(e)),
@@ -728,9 +719,7 @@ pub async fn execute_hybrid_join_with_fallback(
         }
         Err(e) if e.is_fallback_eligible() => {
             if let Some(fb_sql) = fallback_sql {
-                eprintln!(
-                    "hybrid: worker unavailable ({e}), falling back to local-only execution"
-                );
+                eprintln!("hybrid: worker unavailable ({e}), falling back to local-only execution");
                 let conn = Connection::open_in_memory().map_err(|e| format!("duckdb: {e}"))?;
                 conn.execute_batch(local_setup_sql)
                     .map_err(|e| format!("local setup: {e}"))?;

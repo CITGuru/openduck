@@ -16,8 +16,8 @@ use exec_proto::openduck::v1::execution_service_server::{
     ExecutionService, ExecutionServiceServer,
 };
 use exec_proto::openduck::v1::{
-    CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest,
-    RegisterWorkerReply, WorkerRegistration,
+    CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest, RegisterWorkerReply,
+    WorkerRegistration,
 };
 use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
