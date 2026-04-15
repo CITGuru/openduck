@@ -313,6 +313,7 @@ impl ExecutionService for GatewayImpl {
         request: Request<CancelRequest>,
     ) -> Result<Response<CancelReply>, Status> {
         let cancel = request.into_inner();
+        validate_token(&cancel.access_token)?;
         if cancel.execution_id.is_empty() {
             return Ok(Response::new(CancelReply {
                 acknowledged: false,

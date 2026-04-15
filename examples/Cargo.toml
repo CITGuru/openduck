@@ -7,55 +7,55 @@ publish = false
 
 [[example]]
 name = "grpc_roundtrip"
-path = "grpc_roundtrip.rs"
+path = "rust/grpc_roundtrip.rs"
 
 [[example]]
 name = "storage_backend"
-path = "storage_backend.rs"
+path = "rust/storage_backend.rs"
 
 [[example]]
 name = "hybrid_plan"
-path = "hybrid_plan.rs"
+path = "rust/hybrid_plan.rs"
 
 [[example]]
 name = "client_rust"
-path = "client_rust.rs"
+path = "rust/client_rust.rs"
 
 [[example]]
 name = "diff_storage_demo"
-path = "diff_storage_demo.rs"
+path = "rust/diff_storage_demo.rs"
 
 [[example]]
 name = "worker_custom"
-path = "worker_custom.rs"
+path = "rust/worker_custom.rs"
 
 [[example]]
 name = "fuse_concept"
-path = "fuse_concept.rs"
+path = "rust/fuse_concept.rs"
 
 [[example]]
 name = "secrets_and_storage"
-path = "secrets_and_storage.rs"
+path = "rust/secrets_and_storage.rs"
 
 [[example]]
 name = "bridge_storage"
-path = "bridge_storage.rs"
+path = "rust/bridge_storage.rs"
 
 [[example]]
 name = "hybrid_execution"
-path = "hybrid_execution.rs"
+path = "rust/hybrid_execution.rs"
 
 [[example]]
 name = "snapshot_reads"
-path = "snapshot_reads.rs"
+path = "rust/snapshot_reads.rs"
 
 [[example]]
 name = "compute_pushdown"
-path = "compute_pushdown.rs"
+path = "rust/compute_pushdown.rs"
 
 [[example]]
 name = "worker_registration"
-path = "worker_registration.rs"
+path = "rust/worker_registration.rs"
 
 [dependencies]
 exec-worker = { path = "../crates/exec-worker" }

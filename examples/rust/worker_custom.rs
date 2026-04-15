@@ -165,6 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reply = client
         .cancel_execution(Request::new(CancelRequest {
             execution_id: "nonexistent-id".into(),
+            access_token: token.clone(),
         }))
         .await?;
     println!(

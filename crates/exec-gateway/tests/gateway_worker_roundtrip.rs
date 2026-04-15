@@ -79,7 +79,10 @@ async fn gateway_forwards_cancel_to_worker() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     let cancel = client
-        .cancel_execution(Request::new(CancelRequest { execution_id }))
+        .cancel_execution(Request::new(CancelRequest {
+            execution_id,
+            access_token: "test-token".into(),
+        }))
         .await
         .expect("cancel")
         .into_inner();

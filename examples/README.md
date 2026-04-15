@@ -17,8 +17,8 @@ for f in crates/diff-metadata/migrations/*.sql; do psql "$DATABASE_URL" -f "$f";
 
 | Example | What it shows | Run |
 |---------|---------------|-----|
-| `client_rust` | DuckDB Rust client — queries, aggregation, Arrow batches, transactions, hybrid joins | `cargo run --example client_rust` |
-| `client_python.py` | Python client — all connection methods, pandas/Arrow, hybrid queries | `python examples/client_python.py` |
+| `rust/client_rust` | DuckDB Rust client — queries, aggregation, Arrow batches, transactions, hybrid joins | `cargo run --example client_rust` |
+| `python/client_python.py` | Python client — all connection methods, pandas/Arrow, hybrid queries | `python examples/python/client_python.py` |
 | `python/duckdb_sdk_ducklake.py` | DuckDB Python SDK + DuckLake — local lakehouse, remote gateway, hybrid joins | `python examples/python/duckdb_sdk_ducklake.py local` |
 
 ### Rust quick start
@@ -63,21 +63,21 @@ duckdb -unsigned -c "
 
 | Example | What it shows | Run |
 |---------|---------------|-----|
-| `fuse_concept` | How FUSE presents differential storage as a file — page writes, snapshots, isolation | `cargo run --example fuse_concept` |
+| `rust/fuse_concept` | How FUSE presents differential storage as a file — page writes, snapshots, isolation | `cargo run --example fuse_concept` |
 | `fuse_duckdb.sh` | Full end-to-end: FUSE mount → DuckDB → create tables → query (Linux only) | `bash examples/fuse_duckdb.sh` |
-| `diff_storage_demo` | In-memory differential storage — writes, overlaps, snapshots, isolation | `cargo run --example diff_storage_demo` |
-| `grpc_roundtrip` | Start worker + gateway in-process, send SQL via gRPC, receive Arrow IPC | `OPENDUCK_TOKEN=demo cargo run --example grpc_roundtrip` |
-| `hybrid_plan` | Build a hybrid LOCAL/REMOTE plan, insert bridges, resolve AUTO, print EXPLAIN | `cargo run --example hybrid_plan` |
-| `worker_custom` | Worker configurations (in-memory, file-backed, DuckLake), gateway routing, cancellation | `OPENDUCK_TOKEN=demo cargo run --example worker_custom` |
-| `storage_backend` | Postgres-backed storage — bootstrap, write, seal, snapshot read (needs Postgres) | `cargo run --example storage_backend` |
-| `secrets_and_storage` | DuckDB secrets for storage configuration — create, list, redact, URI params | `cargo run --example secrets_and_storage` |
-| `bridge_storage` | C ABI bridge to Rust storage — write, read, fsync, overlay resolution (needs Postgres) | `cargo run --example bridge_storage` |
-| `hybrid_execution` | End-to-end hybrid LOCAL+REMOTE join — worker data + local data via Arrow IPC | `OPENDUCK_TOKEN=demo cargo run --example hybrid_execution` |
-| `snapshot_reads` | Point-in-time reads — write, seal, diverge, read-at-snapshot (needs Postgres) | `cargo run --example snapshot_reads` |
+| `rust/diff_storage_demo` | In-memory differential storage — writes, overlaps, snapshots, isolation | `cargo run --example diff_storage_demo` |
+| `rust/grpc_roundtrip` | Start worker + gateway in-process, send SQL via gRPC, receive Arrow IPC | `OPENDUCK_TOKEN=demo cargo run --example grpc_roundtrip` |
+| `rust/hybrid_plan` | Build a hybrid LOCAL/REMOTE plan, insert bridges, resolve AUTO, print EXPLAIN | `cargo run --example hybrid_plan` |
+| `rust/worker_custom` | Worker configurations (in-memory, file-backed, DuckLake), gateway routing, cancellation | `OPENDUCK_TOKEN=demo cargo run --example worker_custom` |
+| `rust/storage_backend` | Postgres-backed storage — bootstrap, write, seal, snapshot read (needs Postgres) | `cargo run --example storage_backend` |
+| `rust/secrets_and_storage` | DuckDB secrets for storage configuration — create, list, redact, URI params | `cargo run --example secrets_and_storage` |
+| `rust/bridge_storage` | C ABI bridge to Rust storage — write, read, fsync, overlay resolution (needs Postgres) | `cargo run --example bridge_storage` |
+| `rust/hybrid_execution` | End-to-end hybrid LOCAL+REMOTE join — worker data + local data via Arrow IPC | `OPENDUCK_TOKEN=demo cargo run --example hybrid_execution` |
+| `rust/snapshot_reads` | Point-in-time reads — write, seal, diverge, read-at-snapshot (needs Postgres) | `cargo run --example snapshot_reads` |
 
 ## What each example demonstrates
 
-### `client_rust` — DuckDB client usage
+### `rust/client_rust` — DuckDB client usage
 
 Shows 11 patterns: version check, LOAD + ATTACH, query + fetch, aggregation, Arrow result batches, hybrid local+remote join, CSV loading, multiple attached databases, parameterized queries, transactions, and error handling.
 
@@ -91,7 +91,7 @@ Five self-contained sections (run individually or all at once):
 4. **`wrapper`** — Same as #1 but using the `openduck` Python package (handles extension loading and `ATTACH` automatically)
 5. **`worker`** — Documents how to start a DuckLake-backed OpenDuck worker (Postgres metadata + S3 data) and query it from any client
 
-### `diff_storage_demo` — Differential storage internals
+### `rust/diff_storage_demo` — Differential storage internals
 
 Walks through the core storage algorithm that powers OpenDuck:
 
@@ -103,15 +103,15 @@ Walks through the core storage algorithm that powers OpenDuck:
 6. Sparse writes — unwritten regions read as zeroes
 7. Large sequential writes — the pattern DuckDB uses through FUSE
 
-### `grpc_roundtrip` — End-to-end gRPC flow
+### `rust/grpc_roundtrip` — End-to-end gRPC flow
 
 Starts a worker and gateway in-process, sends SQL through the gateway's `ExecuteFragment` RPC, and streams Arrow IPC results. The minimal viable OpenDuck stack.
 
-### `hybrid_plan` — Query plan splitting
+### `rust/hybrid_plan` — Query plan splitting
 
 Builds a query plan tree with `LOCAL` and `REMOTE` scan nodes, inserts `Bridge(R→L)` operators at placement boundaries, resolves `AUTO` placement using catalog metadata, and prints `EXPLAIN`-style output showing where each operator runs.
 
-### `worker_custom` — Worker configurations
+### `rust/worker_custom` — Worker configurations
 
 Shows how to configure workers for different environments:
 
@@ -121,7 +121,7 @@ Shows how to configure workers for different environments:
 - **Gateway routing** — round-robin across multiple workers
 - **Cancellation** — cancel running executions via gRPC
 
-### `fuse_concept` — Storage as a file
+### `rust/fuse_concept` — Storage as a file
 
 Simulates what the FUSE mount does, using the in-memory backend (no Linux/FUSE required):
 
@@ -143,11 +143,11 @@ End-to-end shell script (Linux with FUSE3 + Postgres required):
 5. Explains what happened under the hood (FUSE → layers → extents)
 6. Cleans up (unmount + remove temp dirs)
 
-### `storage_backend` — Postgres storage pipeline
+### `rust/storage_backend` — Postgres storage pipeline
 
 Full end-to-end with the Postgres-backed differential storage: bootstrap a database, write data, seal a snapshot, and verify reads match across tip and snapshot.
 
-### `secrets_and_storage` — Configuration via DuckDB secrets
+### `rust/secrets_and_storage` — Configuration via DuckDB secrets
 
 Shows how the `openduck_storage` secret type integrates with DuckDB's native secret management:
 
@@ -156,7 +156,7 @@ Shows how the `openduck_storage` secret type integrates with DuckDB's native sec
 3. The resolution cascade: secret → env vars → in-memory fallback
 4. Automatic redaction of `postgres_url` in secret listings
 
-### `bridge_storage` — C ABI bridge to Rust
+### `rust/bridge_storage` — C ABI bridge to Rust
 
 Demonstrates the same C ABI that the C++ DuckDB extension uses:
 
@@ -166,7 +166,7 @@ Demonstrates the same C ABI that the C++ DuckDB extension uses:
 4. `openduck_bridge_fsync` — flush to durable storage
 5. Overlay writes — partial overwrites resolve correctly (newest wins)
 
-### `hybrid_execution` — End-to-end hybrid query
+### `rust/hybrid_execution` — End-to-end hybrid query
 
 The full hybrid execution flow with real gRPC:
 
@@ -176,7 +176,7 @@ The full hybrid execution flow with real gRPC:
 4. Executes the local join against local + materialized data
 5. Verifies the result matches a single-process baseline
 
-### `snapshot_reads` — Point-in-time consistency
+### `rust/snapshot_reads` — Point-in-time consistency
 
 Demonstrates snapshot isolation in differential storage:
 

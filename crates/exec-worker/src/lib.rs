@@ -331,7 +331,9 @@ impl ExecutionService for WorkerService {
         &self,
         request: Request<CancelRequest>,
     ) -> Result<Response<CancelReply>, Status> {
-        let id = request.into_inner().execution_id;
+        let cancel = request.into_inner();
+        validate_token(&cancel.access_token)?;
+        let id = cancel.execution_id;
         if id.is_empty() {
             return Ok(Response::new(CancelReply {
                 acknowledged: false,

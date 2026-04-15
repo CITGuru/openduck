@@ -433,6 +433,7 @@ fn pushdown_recursive_owned(node: PlanNode, registry: &TableSourceRegistry) -> P
 ///
 /// Input shape: a SQL string that contains `openduck_run('REMOTE', '...')`
 /// somewhere in it (e.g., as a subquery or table-valued function reference).
+/// The inner SQL may itself contain parentheses (e.g. `count(*)`).
 ///
 /// Returns a `PlanNode` tree with:
 /// - Root: `RunHint { placement: Local }` wrapping the outer SQL
@@ -440,16 +441,9 @@ fn pushdown_recursive_owned(node: PlanNode, registry: &TableSourceRegistry) -> P
 pub fn parse_compound_hint(sql: &str) -> Option<PlanNode> {
     let lower = sql.to_ascii_lowercase();
     let idx = lower.find("openduck_run(")?;
-    let inner_hint = &sql[idx..];
+    let inner_call = extract_balanced_call(&sql[idx..])?;
 
-    let inner_node = parse_openduck_run(
-        inner_hint
-            .split(')')
-            .next()
-            .map(|s| format!("{s})"))
-            .unwrap_or_default()
-            .as_str(),
-    )?;
+    let inner_node = parse_openduck_run(&inner_call)?;
 
     let outer_placement = if lower.starts_with("openduck_run(") {
         if let Some(node) = parse_openduck_run(sql) {
@@ -470,6 +464,33 @@ pub fn parse_compound_hint(sql: &str) -> Option<PlanNode> {
         placement: outer_placement,
         children: vec![inner_node],
     })
+}
+
+/// Extract a balanced `openduck_run(...)` call from the beginning of `s`,
+/// respecting nested parentheses and single-quoted string literals.
+fn extract_balanced_call(s: &str) -> Option<String> {
+    let prefix = "openduck_run(";
+    if !s.to_ascii_lowercase().starts_with(prefix) {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    let mut in_single_quote = false;
+    let mut chars = s.char_indices();
+    for (i, ch) in &mut chars {
+        match ch {
+            '\'' if !in_single_quote => in_single_quote = true,
+            '\'' if in_single_quote => in_single_quote = false,
+            '(' if !in_single_quote => depth += 1,
+            ')' if !in_single_quote => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(s[..=i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Extract the SQL for the first REMOTE fragment found in a plan tree.
@@ -865,6 +886,15 @@ mod tests {
         assert_eq!(node.placement, Placement::Local);
         let remote = extract_remote_sql(&node);
         assert!(remote.is_some(), "should find remote SQL");
+    }
+
+    #[test]
+    fn parse_compound_hint_handles_parens_in_sql() {
+        let sql = "SELECT l.* FROM local_t l JOIN openduck_run('REMOTE', 'SELECT count(*), sum(x) FROM big WHERE id IN (1,2,3)') r ON l.id = r.id";
+        let node = parse_compound_hint(sql).expect("should parse compound with inner parens");
+        assert_eq!(node.placement, Placement::Local);
+        let remote = extract_remote_sql(&node).expect("should find remote SQL");
+        assert_eq!(remote, "SELECT count(*), sum(x) FROM big WHERE id IN (1,2,3)");
     }
 
     #[test]

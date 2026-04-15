@@ -39,6 +39,7 @@ message ArrowIpcBatch {
 
 message CancelRequest {
   string execution_id = 1;
+  string access_token = 2;
 }
 
 message CancelReply {

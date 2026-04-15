@@ -80,7 +80,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 5. Read from tip → should see 0xBB in first 512, 0xAA in next 512
         println!("5. Reading from current tip...");
         let mut tip_buf = vec![0u8; 1024];
-        diff_bridge::openduck_bridge_read(handle, 0, tip_buf.as_mut_ptr(), 1024);
+        let rc = diff_bridge::openduck_bridge_read(handle, 0, tip_buf.as_mut_ptr(), 1024);
+        assert_eq!(rc, 0, "tip read failed: {:?}", last_error());
         let tip_first_512 = tip_buf[..512].iter().all(|&b| b == 0xBB);
         let tip_last_512 = tip_buf[512..].iter().all(|&b| b == 0xAA);
         println!("   First 512 bytes = 0xBB? {tip_first_512}");
@@ -103,23 +104,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 7. Read from snapshot → should see all 0xAA (pre-overwrite)
         println!("7. Reading from snapshot...");
         let mut snap_buf = vec![0u8; 1024];
-        diff_bridge::openduck_bridge_read(snap_handle, 0, snap_buf.as_mut_ptr(), 1024);
+        let rc = diff_bridge::openduck_bridge_read(snap_handle, 0, snap_buf.as_mut_ptr(), 1024);
+        assert_eq!(rc, 0, "snapshot read failed: {:?}", last_error());
         let snap_all_aa = snap_buf.iter().all(|&b| b == 0xAA);
         println!("   All 1024 bytes = 0xAA? {snap_all_aa}\n");
 
-        // 8. Verify snapshot is read-only (write should fail... but our C ABI returns -1)
+        // 8. Verify snapshot handle is read-only
         println!("8. Verifying snapshot handle is read-only...");
         let bad_data = vec![0xFFu8; 16];
-        // Writes on a read-only snapshot handle are valid at the C ABI level
-        // (the PgStorageBackend will return an error). The C++ BridgeStorage
-        // rejects them at a higher level. Here we just demonstrate the concept.
-        println!("   (Write rejection is enforced at the C++ BridgeStorage layer)\n");
+        let rc = diff_bridge::openduck_bridge_write(snap_handle, 0, bad_data.as_ptr(), 16);
+        if rc != 0 {
+            println!("   Write correctly rejected (rc={rc}).");
+            let err_msg = last_error().unwrap_or_default();
+            println!("   Error: {err_msg}\n");
+        } else {
+            println!("   Warning: write was accepted (backend may not enforce read-only at ABI level).\n");
+        }
 
         // Clean up
         println!("9. Closing handles...");
         diff_bridge::openduck_bridge_close(snap_handle);
         diff_bridge::openduck_bridge_close(handle);
-        let _ = bad_data;
         println!("   Done.\n");
     }
 

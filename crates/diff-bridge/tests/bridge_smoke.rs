@@ -63,18 +63,22 @@ fn bridge_overwrite_and_read() {
 
     unsafe {
         let handle = openduck_bridge_open(db_name.as_ptr(), pg_url.as_ptr(), data_dir.as_ptr());
-        assert!(!handle.is_null());
+        assert!(!handle.is_null(), "open failed: {:?}", bridge_last_error_str());
 
         let data_a = [0xAAu8; 128];
-        openduck_bridge_write(handle, 0, data_a.as_ptr(), 128);
+        let rc = openduck_bridge_write(handle, 0, data_a.as_ptr(), 128);
+        assert_eq!(rc, 0, "write A failed: {:?}", bridge_last_error_str());
 
         let data_b = [0xBBu8; 64];
-        openduck_bridge_write(handle, 32, data_b.as_ptr(), 64);
+        let rc = openduck_bridge_write(handle, 32, data_b.as_ptr(), 64);
+        assert_eq!(rc, 0, "write B failed: {:?}", bridge_last_error_str());
 
-        openduck_bridge_fsync(handle);
+        let rc = openduck_bridge_fsync(handle);
+        assert_eq!(rc, 0, "fsync failed: {:?}", bridge_last_error_str());
 
         let mut buf = vec![0u8; 128];
-        openduck_bridge_read(handle, 0, buf.as_mut_ptr(), 128);
+        let rc = openduck_bridge_read(handle, 0, buf.as_mut_ptr(), 128);
+        assert_eq!(rc, 0, "read failed: {:?}", bridge_last_error_str());
 
         assert!(
             buf[0..32].iter().all(|&b| b == 0xAA),
