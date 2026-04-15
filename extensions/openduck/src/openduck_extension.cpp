@@ -155,6 +155,7 @@ struct StreamState {
 	std::unique_ptr<GrpcClient> client;
 	std::unique_ptr<GrpcStream> stream;
 	std::deque<std::shared_ptr<arrow::RecordBatch>> pending_batches;
+	std::string execution_id;
 	bool done = false;
 	std::mutex lock;
 };
@@ -172,6 +173,7 @@ static void InitStreamAndSchema(OpenDuckTableData &data, vector<LogicalType> &re
 	data.state = std::make_shared<StreamState>();
 	data.state->client = std::make_unique<GrpcClient>(data.endpoint);
 	data.state->stream = data.state->client->ExecuteSQL(data.sql, data.database, data.token);
+	data.state->execution_id = data.state->stream->ExecutionId();
 
 	auto first_ipc = data.state->stream->Next();
 	if (!first_ipc) {

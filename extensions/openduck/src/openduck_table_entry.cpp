@@ -36,6 +36,7 @@ static unique_ptr<GlobalTableFunctionState> OpenDuckTableScanInitGlobal(ClientCo
 	state->client = std::make_unique<GrpcClient>(bind_data.endpoint);
 	auto sql = "SELECT * FROM " + bind_data.table_name;
 	state->stream = state->client->ExecuteSQL(sql, bind_data.database, bind_data.token);
+	state->execution_id = state->stream->ExecutionId();
 	return std::move(state);
 }
 

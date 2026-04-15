@@ -190,6 +190,25 @@ enum Commands {
         #[command(subcommand)]
         action: SnapshotAction,
     },
+
+    /// Garbage-collect unreferenced layers and compact extents
+    Gc {
+        /// Postgres URL for metadata
+        #[arg(long, env = "DATABASE_URL")]
+        postgres: String,
+
+        /// Database name
+        #[arg(long)]
+        db: String,
+
+        /// Data directory for storage layers (needed to delete segment files)
+        #[arg(long)]
+        data_dir: String,
+
+        /// Dry-run: list candidates without deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -337,6 +356,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_status(&endpoint, token.as_deref().unwrap_or("")).await
         }
         Some(Commands::Snapshot { action }) => run_snapshot(action).await,
+        Some(Commands::Gc {
+            postgres,
+            db,
+            data_dir,
+            dry_run,
+        }) => run_gc(&postgres, &db, &data_dir, dry_run).await,
         None => run_serve(cli).await,
     }
 }
@@ -489,14 +514,15 @@ async fn run_worker(
     Ok(())
 }
 
-/// Attempt to register this worker with the gateway, retrying with exponential backoff.
+/// Attempt to register this worker with the gateway, retrying with exponential
+/// backoff, then send periodic heartbeats to keep the registration alive.
 async fn register_with_gateway(
     gateway_url: &str,
     config: &exec_worker::WorkerConfig,
     listen_addr: SocketAddr,
 ) {
     use exec_proto::openduck::v1::execution_service_client::ExecutionServiceClient;
-    use exec_proto::openduck::v1::WorkerRegistration;
+    use exec_proto::openduck::v1::{HeartbeatRequest, WorkerRegistration};
 
     let endpoint = format!("http://{listen_addr}");
     let worker_id = if config.worker_id.is_empty() {
@@ -508,7 +534,7 @@ async fn register_with_gateway(
     let mut delay = std::time::Duration::from_millis(500);
     let max_delay = std::time::Duration::from_secs(30);
 
-    for attempt in 1..=20 {
+    let mut client = loop {
         tokio::time::sleep(delay).await;
         match ExecutionServiceClient::connect(gateway_url.to_string()).await {
             Ok(mut client) => {
@@ -527,30 +553,47 @@ async fn register_with_gateway(
                                 worker_id = %worker_id,
                                 "registered with gateway"
                             );
+                            break client;
                         } else {
                             tracing::warn!(gateway = gateway_url, "registration not accepted");
+                            return;
                         }
-                        return;
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            attempt,
-                            %e,
-                            "register_worker RPC failed, retrying..."
-                        );
+                        tracing::warn!(%e, "register_worker RPC failed, retrying...");
                     }
                 }
             }
             Err(e) => {
-                tracing::debug!(attempt, %e, "gateway not reachable, retrying...");
+                tracing::debug!(%e, "gateway not reachable, retrying...");
             }
         }
         delay = (delay * 2).min(max_delay);
+    };
+
+    let heartbeat_interval = std::time::Duration::from_secs(30);
+    loop {
+        tokio::time::sleep(heartbeat_interval).await;
+        let req = HeartbeatRequest {
+            worker_id: worker_id.clone(),
+        };
+        match client.heartbeat(tonic::Request::new(req)).await {
+            Ok(reply) => {
+                if !reply.into_inner().acknowledged {
+                    tracing::warn!(
+                        worker_id = %worker_id,
+                        "heartbeat not acknowledged — re-registering"
+                    );
+                    Box::pin(register_with_gateway(gateway_url, config, listen_addr)).await;
+                    return;
+                }
+                tracing::trace!(worker_id = %worker_id, "heartbeat acknowledged");
+            }
+            Err(e) => {
+                tracing::warn!(%e, "heartbeat failed — gateway may be unreachable");
+            }
+        }
     }
-    tracing::error!(
-        gateway = gateway_url,
-        "failed to register with gateway after 20 attempts"
-    );
 }
 
 // ── Client subcommands ─────────────────────────────────────────────────
@@ -760,7 +803,7 @@ async fn run_snapshot(action: SnapshotAction) -> Result<(), Box<dyn std::error::
             if rows.is_empty() {
                 println!("No snapshots for database '{db}'");
             } else {
-                println!("{:<38}  {}", "SNAPSHOT ID", "CREATED AT");
+                println!("{:<38}  CREATED AT", "SNAPSHOT ID");
                 for (id, ts) in &rows {
                     println!("{id}  {ts}");
                 }
@@ -768,4 +811,67 @@ async fn run_snapshot(action: SnapshotAction) -> Result<(), Box<dyn std::error::
             Ok(())
         }
     }
+}
+
+// ── GC subcommand ──────────────────────────────────────────────────────
+
+async fn run_gc(
+    postgres: &str,
+    db: &str,
+    data_dir: &str,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::PgPool::connect(postgres).await?;
+
+    let db_row = sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM openduck_db WHERE name = $1")
+        .bind(db)
+        .fetch_optional(&pool)
+        .await?;
+
+    let Some((db_id,)) = db_row else {
+        tracing::error!(db, "database not found");
+        std::process::exit(1);
+    };
+
+    let compacted = diff_metadata::gc::compact_extents(&pool, db_id).await?;
+    if compacted > 0 {
+        tracing::info!(compacted, "superseded extents marked");
+    }
+
+    let candidates = diff_metadata::gc::gc_candidates(&pool, db_id).await?;
+    if candidates.is_empty() {
+        println!("No GC candidates for database '{db}'");
+        return Ok(());
+    }
+
+    println!(
+        "{} GC candidate layer(s) for database '{db}':",
+        candidates.len()
+    );
+    for layer in &candidates {
+        println!("  {}  {}", layer.id, layer.storage_uri);
+    }
+
+    if dry_run {
+        println!("(dry-run — no layers deleted)");
+        return Ok(());
+    }
+
+    let data_path = PathBuf::from(data_dir);
+    let mut deleted = 0u64;
+    for layer in &candidates {
+        let segment = data_path.join(&layer.storage_uri);
+        if segment.exists() {
+            if let Err(e) = std::fs::remove_file(&segment) {
+                tracing::warn!(path = %segment.display(), %e, "failed to remove segment file");
+                continue;
+            }
+        }
+        diff_metadata::gc::delete_layer(&pool, layer.id).await?;
+        deleted += 1;
+        tracing::info!(layer_id = %layer.id, "deleted layer");
+    }
+    println!("Deleted {deleted}/{} layer(s)", candidates.len());
+
+    Ok(())
 }

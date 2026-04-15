@@ -21,6 +21,9 @@ public:
   /// finished. Throws GatewayUnavailableError when the endpoint is unreachable,
   /// std::runtime_error for other gRPC or server-side errors.
   virtual std::optional<std::string> Next() = 0;
+
+  /// The execution_id assigned by the gateway for this stream.
+  virtual const std::string &ExecutionId() const = 0;
 };
 
 class GrpcClient {
@@ -30,7 +33,8 @@ public:
 
   /// Start executing SQL on the remote gateway. Returns a stream that yields
   /// Arrow IPC payloads (each payload is a complete IPC stream: schema +
-  /// record batches + EOS).
+  /// record batches + EOS). The gateway assigns an execution_id accessible
+  /// via GrpcStream::ExecutionId(), usable with CancelExecution().
   std::unique_ptr<GrpcStream> ExecuteSQL(const std::string &sql,
                                          const std::string &database,
                                          const std::string &token);
@@ -41,7 +45,6 @@ public:
 
 private:
   struct Impl;
-  std::unique_ptr<Impl> impl_;
-};
+  std::unique_ptr<Impl> impl_;};
 
 } // namespace openduck

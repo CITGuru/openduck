@@ -9,6 +9,7 @@ pub mod hybrid;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use std::{collections::HashMap, sync::Mutex};
 
 use exec_proto::openduck::v1::execution_service_client::ExecutionServiceClient;
@@ -16,8 +17,8 @@ use exec_proto::openduck::v1::execution_service_server::{
     ExecutionService, ExecutionServiceServer,
 };
 use exec_proto::openduck::v1::{
-    CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest, RegisterWorkerReply,
-    WorkerRegistration,
+    CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest, HeartbeatReply,
+    HeartbeatRequest, RegisterWorkerReply, WorkerRegistration,
 };
 use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
@@ -85,6 +86,11 @@ pub fn worker_base_urls() -> Vec<String> {
 
 // ── Worker registry with database-affinity routing ─────────────────────
 
+/// How long a worker can go without a heartbeat before being evicted.
+const HEARTBEAT_TTL: std::time::Duration = std::time::Duration::from_secs(90);
+/// How often the reaper checks for stale workers.
+const REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A registered worker's capabilities, used for affinity routing.
 #[derive(Debug, Clone)]
 pub struct RegisteredWorker {
@@ -93,6 +99,7 @@ pub struct RegisteredWorker {
     pub databases: Vec<String>,
     pub compute_context: String,
     pub max_concurrency: u32,
+    pub last_heartbeat: Instant,
 }
 
 /// Thread-safe worker registry. Workers register via `RegisterWorker` RPC;
@@ -116,6 +123,30 @@ impl WorkerRegistry {
         }
     }
 
+    /// Record a heartbeat for the given worker. Returns false if the worker
+    /// is not registered.
+    pub fn heartbeat(&self, worker_id: &str) -> bool {
+        if let Ok(mut guard) = self.workers.lock() {
+            if let Some(w) = guard.iter_mut().find(|w| w.worker_id == worker_id) {
+                w.last_heartbeat = Instant::now();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Remove workers whose last heartbeat is older than `ttl`.
+    pub fn evict_stale(&self, ttl: std::time::Duration) -> usize {
+        let cutoff = Instant::now() - ttl;
+        if let Ok(mut guard) = self.workers.lock() {
+            let before = guard.len();
+            guard.retain(|w| w.last_heartbeat >= cutoff);
+            before - guard.len()
+        } else {
+            0
+        }
+    }
+
     /// Pick the best worker for `database`. Prefers workers that explicitly
     /// list the database; falls back to round-robin over all workers.
     pub fn pick(&self, database: &str) -> Option<String> {
@@ -135,7 +166,6 @@ impl WorkerRegistry {
             }
         }
 
-        // Fallback: round-robin over all registered workers.
         let idx = self.next.fetch_add(1, Ordering::Relaxed) % guard.len();
         Some(guard[idx].endpoint.clone())
     }
@@ -212,7 +242,7 @@ impl ExecutionService for GatewayImpl {
                 if let Some(node) = hybrid::parse_openduck_run(sql) {
                     let rewritten = hybrid::insert_bridges(node.clone());
                     let explain = hybrid::explain_annotated(&rewritten);
-                    eprintln!("hybrid plan:\n{explain}");
+                    tracing::debug!(plan = %explain, "hybrid plan");
 
                     if let hybrid::NodeKind::RunHint {
                         sql: inner_sql,
@@ -234,7 +264,7 @@ impl ExecutionService for GatewayImpl {
                     }
                 } else if let Some(parsed) = hybrid::parse_compound_hint(sql) {
                     let explain = hybrid::explain_annotated(&parsed);
-                    eprintln!("hybrid compound plan:\n{explain}");
+                    tracing::debug!(plan = %explain, "hybrid compound plan");
                     inner.plan = hybrid::extract_remote_sql(&parsed)
                         .unwrap_or(sql.to_string())
                         .as_bytes()
@@ -360,9 +390,12 @@ impl ExecutionService for GatewayImpl {
         } else {
             reg.worker_id.clone()
         };
-        eprintln!(
-            "register_worker: id={worker_id} endpoint={} databases={:?} ctx={}",
-            reg.endpoint, reg.databases, reg.compute_context,
+        tracing::info!(
+            worker_id = %worker_id,
+            endpoint = %reg.endpoint,
+            databases = ?reg.databases,
+            compute_context = %reg.compute_context,
+            "worker registered"
         );
         self.registry.register(RegisteredWorker {
             worker_id,
@@ -370,8 +403,21 @@ impl ExecutionService for GatewayImpl {
             databases: reg.databases,
             compute_context: reg.compute_context,
             max_concurrency: reg.max_concurrency,
+            last_heartbeat: Instant::now(),
         });
         Ok(Response::new(RegisterWorkerReply { accepted: true }))
+    }
+
+    async fn heartbeat(
+        &self,
+        request: Request<HeartbeatRequest>,
+    ) -> Result<Response<HeartbeatReply>, Status> {
+        let hb = request.into_inner();
+        let ack = self.registry.heartbeat(&hb.worker_id);
+        if !ack {
+            tracing::debug!(worker_id = %hb.worker_id, "heartbeat from unknown worker");
+        }
+        Ok(Response::new(HeartbeatReply { acknowledged: ack }))
     }
 }
 
@@ -389,8 +435,21 @@ pub async fn serve_with_shutdown(
     workers: Vec<String>,
     shutdown: Option<tokio::sync::watch::Receiver<()>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let svc = ExecutionServiceServer::new(GatewayImpl::new(workers));
-    println!("openduck-gateway on {addr}");
+    let gw = GatewayImpl::new(workers);
+    let registry = gw.registry.clone();
+    let svc = ExecutionServiceServer::new(gw);
+
+    let reaper = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(REAPER_INTERVAL).await;
+            let evicted = registry.evict_stale(HEARTBEAT_TTL);
+            if evicted > 0 {
+                tracing::info!(evicted, remaining = registry.len(), "evicted stale workers");
+            }
+        }
+    });
+
+    tracing::info!(%addr, "openduck-gateway listening");
     if let Some(mut rx) = shutdown {
         Server::builder()
             .add_service(svc)
@@ -401,5 +460,6 @@ pub async fn serve_with_shutdown(
     } else {
         Server::builder().add_service(svc).serve(addr).await?;
     }
+    reaper.abort();
     Ok(())
 }

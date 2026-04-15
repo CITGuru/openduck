@@ -10,6 +10,8 @@ service ExecutionService {
   rpc CancelExecution(CancelRequest) returns (CancelReply);
   // Workers register capabilities so the gateway can route by database affinity.
   rpc RegisterWorker(WorkerRegistration) returns (RegisterWorkerReply);
+  // Workers send periodic heartbeats to keep their registration alive.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatReply);
 }
 
 message ExecuteFragmentRequest {
@@ -65,4 +67,12 @@ message WorkerRegistration {
 
 message RegisterWorkerReply {
   bool accepted = 1;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+}
+
+message HeartbeatReply {
+  bool acknowledged = 1;
 }

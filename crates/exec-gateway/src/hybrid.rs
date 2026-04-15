@@ -686,10 +686,10 @@ pub async fn execute_hybrid_join(
     let batches = collect_remote_batches(worker_url, remote_sql, token)
         .await
         .map_err(|e| e.to_string())?;
-    eprintln!(
-        "hybrid: collected {} batch(es) from remote, {} total rows",
-        batches.len(),
-        batches.iter().map(|b| b.num_rows()).sum::<usize>()
+    tracing::debug!(
+        batches = batches.len(),
+        rows = batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+        "hybrid: collected remote batches"
     );
 
     let conn = Connection::open_in_memory().map_err(|e| format!("duckdb: {e}"))?;
@@ -726,10 +726,10 @@ pub async fn execute_hybrid_join_with_fallback(
 ) -> Result<i64, String> {
     match collect_remote_batches(worker_url, remote_sql, token).await {
         Ok(batches) => {
-            eprintln!(
-                "hybrid: collected {} batch(es) from remote, {} total rows",
-                batches.len(),
-                batches.iter().map(|b| b.num_rows()).sum::<usize>()
+            tracing::debug!(
+                batches = batches.len(),
+                rows = batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+                "hybrid: collected remote batches"
             );
             let conn = Connection::open_in_memory().map_err(|e| format!("duckdb: {e}"))?;
             conn.execute_batch(local_setup_sql)
@@ -740,7 +740,7 @@ pub async fn execute_hybrid_join_with_fallback(
         }
         Err(e) if e.is_fallback_eligible() => {
             if let Some(fb_sql) = fallback_sql {
-                eprintln!("hybrid: worker unavailable ({e}), falling back to local-only execution");
+                tracing::warn!(%e, "hybrid: worker unavailable, falling back to local-only execution");
                 let conn = Connection::open_in_memory().map_err(|e| format!("duckdb: {e}"))?;
                 conn.execute_batch(local_setup_sql)
                     .map_err(|e| format!("local setup: {e}"))?;

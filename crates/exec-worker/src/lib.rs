@@ -15,7 +15,7 @@ use exec_proto::openduck::v1::execution_service_server::{
 };
 use exec_proto::openduck::v1::{
     ArrowIpcBatch, CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest,
-    RegisterWorkerReply, WorkerRegistration,
+    HeartbeatReply, HeartbeatRequest, RegisterWorkerReply, WorkerRegistration,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -153,10 +153,10 @@ fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
             let db_file = data_dir.join(format!("{db_name}.duckdb"));
             let is_new = !db_file.exists();
             let conn = Connection::open(&db_file).map_err(|e| e.to_string())?;
-            eprintln!(
-                "info: InProcess storage — {} DuckDB at {}",
-                if is_new { "created" } else { "opened" },
-                db_file.display(),
+            tracing::info!(
+                path = %db_file.display(),
+                is_new,
+                "InProcess storage"
             );
             conn
         }
@@ -359,11 +359,20 @@ impl ExecutionService for WorkerService {
         request: Request<WorkerRegistration>,
     ) -> Result<Response<RegisterWorkerReply>, Status> {
         let reg = request.into_inner();
-        eprintln!(
-            "register_worker: id={} endpoint={} databases={:?} ctx={}",
-            reg.worker_id, reg.endpoint, reg.databases, reg.compute_context,
+        tracing::info!(
+            worker_id = %reg.worker_id,
+            endpoint = %reg.endpoint,
+            databases = ?reg.databases,
+            "register_worker received (forwarded)"
         );
         Ok(Response::new(RegisterWorkerReply { accepted: true }))
+    }
+
+    async fn heartbeat(
+        &self,
+        _request: Request<HeartbeatRequest>,
+    ) -> Result<Response<HeartbeatReply>, Status> {
+        Ok(Response::new(HeartbeatReply { acknowledged: true }))
     }
 }
 
@@ -394,7 +403,7 @@ pub async fn serve_with_shutdown(
     shutdown: Option<tokio::sync::watch::Receiver<()>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let svc = ExecutionServiceServer::new(WorkerService::new(config));
-    println!("openduck-worker gRPC on {addr}");
+    tracing::info!(%addr, "openduck-worker listening");
     if let Some(mut rx) = shutdown {
         Server::builder()
             .add_service(svc)

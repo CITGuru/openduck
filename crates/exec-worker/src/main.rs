@@ -26,10 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let v: i32 = r.get(0)?;
             assert_eq!(v, 1);
         }
-        println!(
-            "openduck-worker: --smoke DuckDB OK (DuckDB {})",
-            exec_worker::DUCKDB_SEMVER
-        );
+        tracing::info!(duckdb = exec_worker::DUCKDB_SEMVER, "smoke test passed");
         return Ok(());
     }
 
@@ -51,11 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let addr = parse_addr()?;
-    println!(
-        "OpenDuck worker DuckDB {}; db={:?}; ducklake={}; set OPENDUCK_WORKER_LISTEN to override bind",
-        exec_worker::DUCKDB_SEMVER,
-        config.db_path.as_deref().unwrap_or("in-memory".as_ref()),
-        if config.ducklake_metadata.is_some() { "configured" } else { "off" },
+    tracing::info!(
+        duckdb = exec_worker::DUCKDB_SEMVER,
+        db = ?config.db_path.as_deref().unwrap_or("in-memory".as_ref()),
+        ducklake = if config.ducklake_metadata.is_some() { "configured" } else { "off" },
+        "starting openduck-worker"
     );
     exec_worker::serve_with_config(addr, config).await?;
     Ok(())

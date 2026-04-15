@@ -1,5 +1,9 @@
 #include "grpc_client.hpp"
 
+#include <atomic>
+#include <chrono>
+#include <sstream>
+
 #include <grpcpp/grpcpp.h>
 
 #include "openduck/v1/execution.grpc.pb.h"
@@ -36,13 +40,27 @@ GrpcClient::~GrpcClient() = default;
 
 // ── GrpcStreamImpl ─────────────────────────────────────────────────────────
 
+static std::string GenerateExecutionId() {
+  static std::atomic<uint64_t> counter{0};
+  auto now = std::chrono::steady_clock::now().time_since_epoch();
+  auto ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+  std::ostringstream oss;
+  oss << "exec-" << ns << "-" << counter.fetch_add(1, std::memory_order_relaxed);
+  return oss.str();
+}
+
 class GrpcStreamImpl : public GrpcStream {
 public:
   GrpcStreamImpl(
       std::unique_ptr<grpc::ClientContext> ctx,
       std::unique_ptr<
-          grpc::ClientReader<::openduck::v1::ExecuteFragmentChunk>> reader)
-      : ctx_(std::move(ctx)), reader_(std::move(reader)) {}
+          grpc::ClientReader<::openduck::v1::ExecuteFragmentChunk>> reader,
+      std::string execution_id)
+      : ctx_(std::move(ctx)), reader_(std::move(reader)),
+        execution_id_(std::move(execution_id)) {}
+
+  const std::string &ExecutionId() const override { return execution_id_; }
 
   std::optional<std::string> Next() override {
     if (finished_) {
@@ -77,6 +95,7 @@ private:
   std::unique_ptr<grpc::ClientContext> ctx_;
   std::unique_ptr<grpc::ClientReader<::openduck::v1::ExecuteFragmentChunk>>
       reader_;
+  std::string execution_id_;
   bool finished_ = false;
 };
 
@@ -90,17 +109,21 @@ GrpcClient::ExecuteSQL(const std::string &sql, const std::string &database,
     throw GatewayUnavailableError("OpenDuck gateway channel is shut down");
   }
 
+  auto exec_id = GenerateExecutionId();
+
   ::openduck::v1::ExecuteFragmentRequest request;
   request.set_plan(sql);
   request.set_database(database);
   request.set_access_token(token);
+  request.set_execution_id(exec_id);
 
   auto ctx = std::make_unique<grpc::ClientContext>();
   auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(30);
   ctx->set_deadline(deadline);
 
   auto reader = impl_->stub->ExecuteFragment(ctx.get(), request);
-  return std::make_unique<GrpcStreamImpl>(std::move(ctx), std::move(reader));
+  return std::make_unique<GrpcStreamImpl>(std::move(ctx), std::move(reader),
+                                          std::move(exec_id));
 }
 
 // ── GrpcClient::CancelExecution ────────────────────────────────────────────
