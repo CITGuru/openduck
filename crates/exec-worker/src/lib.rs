@@ -95,35 +95,8 @@ impl Default for WorkerService {
 }
 
 /// Validate `request_token` against `OPENDUCK_TOKEN`.
-/// Dev mode (unset/empty `OPENDUCK_TOKEN`) accepts any token.
-#[allow(clippy::result_large_err)]
-fn validate_token(request_token: &str) -> Result<(), Status> {
-    let expected = std::env::var("OPENDUCK_TOKEN").unwrap_or_default();
-    if expected.is_empty() {
-        return Ok(());
-    }
-    if request_token.is_empty() {
-        return Err(Status::unauthenticated(
-            "access_token required when OPENDUCK_TOKEN is set",
-        ));
-    }
-    if constant_time_eq(request_token.as_bytes(), expected.as_bytes()) {
-        Ok(())
-    } else {
-        Err(Status::unauthenticated("invalid access_token"))
-    }
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
+/// Delegates to the shared implementation in `exec_proto::validate_token`.
+use exec_proto::validate_token;
 
 fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
     let conn = match &config.storage {
@@ -167,6 +140,13 @@ fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
     {
         conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
             .map_err(|e| format!("ducklake install/load: {e}"))?;
+        // Validate paths to prevent SQL injection via format-string interpolation.
+        if meta_url.contains('\'') || meta_url.contains('\\') {
+            return Err("ducklake_metadata path contains invalid characters".into());
+        }
+        if data_path.contains('\'') || data_path.contains('\\') {
+            return Err("ducklake_data path contains invalid characters".into());
+        }
         let attach_sql = format!(
             "ATTACH 'ducklake:lake' (DATA_PATH '{data_path}', METADATA_PATH '{meta_url}');"
         );

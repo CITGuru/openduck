@@ -315,13 +315,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // SAFETY: called before any worker threads are spawned; main thread only.
     if let Some(tok) = &cli.token {
-        unsafe { std::env::set_var("OPENDUCK_TOKEN", tok) };
+        std::env::set_var("OPENDUCK_TOKEN", tok);
     }
     if cli.hybrid {
-        unsafe { std::env::set_var("OPENDUCK_HYBRID", "1") };
+        std::env::set_var("OPENDUCK_HYBRID", "1");
     }
     if cli.max_in_flight != 64 {
-        unsafe { std::env::set_var("OPENDUCK_MAX_IN_FLIGHT", cli.max_in_flight.to_string()) };
+        std::env::set_var("OPENDUCK_MAX_IN_FLIGHT", cli.max_in_flight.to_string());
     }
 
     match cli.command {

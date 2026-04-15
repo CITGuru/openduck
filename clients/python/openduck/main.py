@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Optional
 
 import duckdb
@@ -59,6 +60,12 @@ def connect(
             "No token provided. Pass token= or set the OPENDUCK_TOKEN env var."
         )
 
+    # Validate alias to prevent SQL injection via identifier names
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', alias):
+        raise ValueError(f"Invalid alias: {alias!r}. Must be a valid SQL identifier.")
+    if not re.match(r'^[A-Za-z0-9_\-./:]+$', db_name):
+        raise ValueError(f"Invalid database name: {db_name!r}.")
+
     duckdb_config.setdefault("allow_unsigned_extensions", "true")
     con = duckdb.connect(":memory:", config=duckdb_config)
 
@@ -70,8 +77,8 @@ def connect(
         con.execute("LOAD openduck;")
 
     query_params = f"?endpoint={endpoint}&token={token}"
-    con.execute(f"ATTACH 'openduck:{db_name}{query_params}' AS {alias};")
-    con.execute(f"USE {alias};")
+    con.execute(f"ATTACH 'openduck:{db_name}{query_params}' AS \"{alias}\";")
+    con.execute(f"USE \"{alias}\";")
 
     return OpenDuckConnection(con, alias=alias, database=db_name)
 

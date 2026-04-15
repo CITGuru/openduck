@@ -44,36 +44,8 @@ pub fn hybrid_enabled() -> bool {
 
 /// Validate `request_token` against the expected token from `OPENDUCK_TOKEN`.
 ///
-/// - If `OPENDUCK_TOKEN` is unset or empty: dev mode — any token (including empty) is accepted.
-/// - If `OPENDUCK_TOKEN` is set: `request_token` must match (constant-time comparison).
-#[allow(clippy::result_large_err)]
-pub fn validate_token(request_token: &str) -> Result<(), Status> {
-    let expected = std::env::var("OPENDUCK_TOKEN").unwrap_or_default();
-    if expected.is_empty() {
-        return Ok(());
-    }
-    if request_token.is_empty() {
-        return Err(Status::unauthenticated(
-            "access_token required when OPENDUCK_TOKEN is set",
-        ));
-    }
-    if constant_time_eq(request_token.as_bytes(), expected.as_bytes()) {
-        Ok(())
-    } else {
-        Err(Status::unauthenticated("invalid access_token"))
-    }
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
+/// Delegates to the shared implementation in `exec_proto::validate_token`.
+pub use exec_proto::validate_token;
 
 pub fn worker_base_urls() -> Vec<String> {
     std::env::var("OPENDUCK_WORKER_ADDRS")
