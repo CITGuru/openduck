@@ -61,6 +61,53 @@ jobs:
           DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
         run: cargo test --workspace
 
+      - name: diff-bridge integration tests
+        env:
+          DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
+        run: cargo test -p diff-bridge -- --ignored
+
+  cpp-extension:
+    runs-on: ubuntu-latest
+    env:
+      GEN: ninja
+      DISABLE_SANITIZER: 1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: cpp-extension-linux
+
+      - name: Build extension (debug)
+        working-directory: extensions/openduck
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          make debug
+
+      - name: SQL logic tests
+        working-directory: extensions/openduck
+        run: make test_debug
+
+      - name: C++ unit tests (test_arrow_bridge)
+        working-directory: extensions/openduck
+        run: |
+          cd test/cpp
+          cmake -B build \
+            -DCMAKE_PREFIX_PATH="$(pwd)/../../build/debug/vcpkg_installed/x64-linux;$(pwd)/../../build/debug" \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+          ./build/test_arrow_bridge
+
   # Optional: FUSE e2e needs /dev/fuse + privileged runners (see docs/macFUSE.md).
   fuse-e2e-linux:
     runs-on: ubuntu-latest
