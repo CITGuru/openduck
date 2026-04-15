@@ -894,7 +894,10 @@ mod tests {
         let node = parse_compound_hint(sql).expect("should parse compound with inner parens");
         assert_eq!(node.placement, Placement::Local);
         let remote = extract_remote_sql(&node).expect("should find remote SQL");
-        assert_eq!(remote, "SELECT count(*), sum(x) FROM big WHERE id IN (1,2,3)");
+        assert_eq!(
+            remote,
+            "SELECT count(*), sum(x) FROM big WHERE id IN (1,2,3)"
+        );
     }
 
     #[test]

@@ -63,7 +63,11 @@ fn bridge_overwrite_and_read() {
 
     unsafe {
         let handle = openduck_bridge_open(db_name.as_ptr(), pg_url.as_ptr(), data_dir.as_ptr());
-        assert!(!handle.is_null(), "open failed: {:?}", bridge_last_error_str());
+        assert!(
+            !handle.is_null(),
+            "open failed: {:?}",
+            bridge_last_error_str()
+        );
 
         let data_a = [0xAAu8; 128];
         let rc = openduck_bridge_write(handle, 0, data_a.as_ptr(), 128);
