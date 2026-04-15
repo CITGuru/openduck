@@ -380,8 +380,26 @@ pub async fn serve(
     addr: std::net::SocketAddr,
     workers: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    serve_with_shutdown(addr, workers, None).await
+}
+
+/// Run the gateway with an optional graceful shutdown signal.
+pub async fn serve_with_shutdown(
+    addr: std::net::SocketAddr,
+    workers: Vec<String>,
+    shutdown: Option<tokio::sync::watch::Receiver<()>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let svc = ExecutionServiceServer::new(GatewayImpl::new(workers));
     println!("openduck-gateway on {addr}");
-    Server::builder().add_service(svc).serve(addr).await?;
+    if let Some(mut rx) = shutdown {
+        Server::builder()
+            .add_service(svc)
+            .serve_with_shutdown(addr, async move {
+                let _ = rx.changed().await;
+            })
+            .await?;
+    } else {
+        Server::builder().add_service(svc).serve(addr).await?;
+    }
     Ok(())
 }

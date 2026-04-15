@@ -12,7 +12,17 @@ path = "src/main.rs"
 [dependencies]
 exec-gateway = { path = "../exec-gateway" }
 exec-worker  = { path = "../exec-worker" }
+exec-proto   = { path = "../exec-proto" }
+diff-core    = { path = "../diff-core" }
+diff-metadata = { path = "../diff-metadata" }
 clap = { version = "4", features = ["derive", "env"] }
 tokio.workspace = true
+tonic.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+chrono.workspace = true
+arrow = { version = "58", default-features = false, features = ["ipc", "prettyprint", "json", "csv"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
