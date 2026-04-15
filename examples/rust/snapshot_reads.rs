@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 8. Verify snapshot handle is read-only
         println!("8. Verifying snapshot handle is read-only...");
-        let bad_data = vec![0xFFu8; 16];
+        let bad_data = [0xFFu8; 16];
         let rc = diff_bridge::openduck_bridge_write(snap_handle, 0, bad_data.as_ptr(), 16);
         if rc != 0 {
             println!("   Write correctly rejected (rc={rc}).");
