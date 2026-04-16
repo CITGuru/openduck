@@ -128,9 +128,11 @@ GrpcClient::ExecuteSQL(const std::string &sql, const std::string &database,
 
 // ── GrpcClient::CancelExecution ────────────────────────────────────────────
 
-bool GrpcClient::CancelExecution(const std::string &execution_id) {
+bool GrpcClient::CancelExecution(const std::string &execution_id,
+                                 const std::string &token) {
   ::openduck::v1::CancelRequest request;
   request.set_execution_id(execution_id);
+  request.set_access_token(token);
 
   ::openduck::v1::CancelReply reply;
   grpc::ClientContext ctx;

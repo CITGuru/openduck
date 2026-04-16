@@ -69,6 +69,8 @@ message WorkerRegistration {
   // Tables this worker is authoritative for (used by the planner for
   // remote placement and co-location decisions). Empty = discover at query time.
   repeated string tables = 6;
+  // Bearer-style auth token (validated against OPENDUCK_TOKEN).
+  string access_token = 7;
 }
 
 message RegisterWorkerReply {
@@ -77,6 +79,8 @@ message RegisterWorkerReply {
 
 message HeartbeatRequest {
   string worker_id = 1;
+  // Bearer-style auth token (validated against OPENDUCK_TOKEN).
+  string access_token = 2;
 }
 
 message HeartbeatReply {

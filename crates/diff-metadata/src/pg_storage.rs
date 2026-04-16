@@ -71,13 +71,19 @@ struct ExtentRow {
     length: i64,
 }
 
-fn resolve_path(data_dir: &Path, storage_uri: &str) -> PathBuf {
+fn resolve_path(data_dir: &Path, storage_uri: &str) -> Result<PathBuf, crate::MetadataError> {
     let p = Path::new(storage_uri);
     if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        data_dir.join(storage_uri)
+        return Err(crate::MetadataError::Runtime(format!(
+            "storage_uri must be relative, got absolute path: {storage_uri}"
+        )));
     }
+    if p.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(crate::MetadataError::Runtime(format!(
+            "storage_uri must not contain '..': {storage_uri}"
+        )));
+    }
+    Ok(data_dir.join(storage_uri))
 }
 
 impl PgStorageBackend {
@@ -152,7 +158,7 @@ impl PgStorageBackend {
         .fetch_one(pool)
         .await?;
 
-        let path = resolve_path(data_dir, &active.storage_uri);
+        let path = resolve_path(data_dir, &active.storage_uri)?;
         let segment = AppendSegment::open_existing(&path)
             .map_err(|e| MetadataError::LayerFs(e.to_string()))?;
 
@@ -244,10 +250,11 @@ impl PgStorageBackend {
             .bind(sid)
             .fetch_all(&self.pool)
             .await?;
-            return Ok(rows
-                .into_iter()
-                .map(|r| (r.id, resolve_path(&self.data_dir, &r.storage_uri)))
-                .collect());
+            let mut result = Vec::with_capacity(rows.len());
+            for r in rows {
+                result.push((r.id, resolve_path(&self.data_dir, &r.storage_uri)?));
+            }
+            return Ok(result);
         }
 
         if self.read_only_snapshot.is_some() {
@@ -269,7 +276,10 @@ impl PgStorageBackend {
         .fetch_one(&self.pool)
         .await?;
 
-        let mut out = vec![(active.id, resolve_path(&self.data_dir, &active.storage_uri))];
+        let mut out = vec![(
+            active.id,
+            resolve_path(&self.data_dir, &active.storage_uri)?,
+        )];
 
         if let Some(snap_id) = tip {
             let sealed = sqlx::query_as::<_, LayerIdPath>(
@@ -283,7 +293,7 @@ impl PgStorageBackend {
             .fetch_all(&self.pool)
             .await?;
             for r in sealed {
-                out.push((r.id, resolve_path(&self.data_dir, &r.storage_uri)));
+                out.push((r.id, resolve_path(&self.data_dir, &r.storage_uri)?));
             }
         }
 
@@ -495,8 +505,9 @@ impl PgStorageBackend {
         if let Some(store) = &self.blob_store {
             let sealed_path = resolve_path(
                 &self.data_dir,
-                &format!("{}/active-{sealed_layer_id}.layer", self.db_id,),
-            );
+                &format!("{}/active-{sealed_layer_id}.layer", self.db_id),
+            )
+            .map_err(|e| DiffCoreError::Storage(e.to_string()))?;
             if sealed_path.exists() {
                 if let Ok(data) = std::fs::read(&sealed_path) {
                     let key = format!("{}/{sealed_layer_id}.layer", self.db_id);

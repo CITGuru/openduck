@@ -41,7 +41,8 @@ public:
 
   /// Cancel a running execution on the remote gateway.
   /// Returns true if the cancellation was acknowledged.
-  bool CancelExecution(const std::string &execution_id);
+  bool CancelExecution(const std::string &execution_id,
+                       const std::string &token);
 
 private:
   struct Impl;

@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use arrow::ipc::writer::StreamWriter;
 use duckdb::Connection;
+use exec_proto::auth::validate_token;
 use exec_proto::openduck::v1::execute_fragment_chunk::Payload;
 use exec_proto::openduck::v1::execution_service_server::{
     ExecutionService, ExecutionServiceServer,
@@ -23,8 +24,6 @@ use tokio_stream::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
-use exec_proto::auth::validate_token;
-
 
 /// Pinned DuckDB version for the worker and C++ extension (see `extensions/openduck/DUCKDB_VERSION`).
 pub const DUCKDB_SEMVER: &str = "1.5.0";
@@ -35,7 +34,7 @@ struct WorkerState {
 }
 
 /// How the worker connects DuckDB to differential storage.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub enum StorageMode {
     /// No differential storage — use db_path or in-memory (current default).
     #[default]
@@ -52,6 +51,26 @@ pub enum StorageMode {
         postgres_url: String,
         data_dir: PathBuf,
     },
+}
+
+impl std::fmt::Debug for StorageMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Direct => write!(f, "Direct"),
+            Self::Fuse { mountpoint } => f
+                .debug_struct("Fuse")
+                .field("mountpoint", mountpoint)
+                .finish(),
+            Self::InProcess {
+                db_name, data_dir, ..
+            } => f
+                .debug_struct("InProcess")
+                .field("db_name", db_name)
+                .field("postgres_url", &"[REDACTED]")
+                .field("data_dir", data_dir)
+                .finish(),
+        }
+    }
 }
 
 /// Worker configuration.
@@ -98,7 +117,6 @@ impl Default for WorkerService {
     }
 }
 
-
 fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
     let conn = match &config.storage {
         StorageMode::Direct => match &config.db_path {
@@ -122,6 +140,11 @@ fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
             postgres_url: _,
             data_dir,
         } => {
+            if db_name.contains('/') || db_name.contains('\\') || db_name.contains("..") {
+                return Err(format!(
+                    "db_name contains path separators or '..': {db_name}"
+                ));
+            }
             std::fs::create_dir_all(data_dir)
                 .map_err(|e| format!("create data_dir {}: {e}", data_dir.display()))?;
             let db_file = data_dir.join(format!("{db_name}.duckdb"));
@@ -335,6 +358,7 @@ impl ExecutionService for WorkerService {
         request: Request<WorkerRegistration>,
     ) -> Result<Response<RegisterWorkerReply>, Status> {
         let reg = request.into_inner();
+        validate_token(&reg.access_token)?;
         tracing::info!(
             worker_id = %reg.worker_id,
             endpoint = %reg.endpoint,
@@ -346,9 +370,13 @@ impl ExecutionService for WorkerService {
 
     async fn heartbeat(
         &self,
-        _request: Request<HeartbeatRequest>,
+        request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatReply>, Status> {
-        Ok(Response::new(HeartbeatReply { acknowledged: true }))
+        let hb = request.into_inner();
+        validate_token(&hb.access_token)?;
+        Ok(Response::new(HeartbeatReply {
+            acknowledged: hb.worker_id.len() > 0,
+        }))
     }
 }
 
@@ -378,7 +406,10 @@ pub async fn serve_with_shutdown(
     config: WorkerConfig,
     shutdown: Option<tokio::sync::watch::Receiver<()>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let svc = ExecutionServiceServer::new(WorkerService::new(config));
+    const MAX_MSG_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+    let svc = ExecutionServiceServer::new(WorkerService::new(config))
+        .max_decoding_message_size(MAX_MSG_SIZE)
+        .max_encoding_message_size(MAX_MSG_SIZE);
     tracing::info!(%addr, "openduck-worker listening");
     if let Some(mut rx) = shutdown {
         Server::builder()

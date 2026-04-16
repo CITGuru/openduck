@@ -530,6 +530,7 @@ async fn register_with_gateway(
     } else {
         config.worker_id.clone()
     };
+    let access_token = std::env::var("OPENDUCK_TOKEN").unwrap_or_default();
 
     let mut delay = std::time::Duration::from_millis(500);
     let max_delay = std::time::Duration::from_secs(30);
@@ -545,6 +546,7 @@ async fn register_with_gateway(
                     compute_context: config.compute_context.clone(),
                     max_concurrency: config.max_concurrency,
                     tables: config.tables.clone(),
+                    access_token: access_token.clone(),
                 };
                 match client.register_worker(tonic::Request::new(reg)).await {
                     Ok(reply) => {
@@ -577,6 +579,7 @@ async fn register_with_gateway(
         tokio::time::sleep(heartbeat_interval).await;
         let req = HeartbeatRequest {
             worker_id: worker_id.clone(),
+            access_token: access_token.clone(),
         };
         match client.heartbeat(tonic::Request::new(req)).await {
             Ok(reply) => {
@@ -863,6 +866,18 @@ async fn run_gc(
     let data_path = PathBuf::from(data_dir);
     let mut deleted = 0u64;
     for layer in &candidates {
+        let uri_path = std::path::Path::new(&layer.storage_uri);
+        if uri_path.is_absolute()
+            || uri_path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        {
+            tracing::warn!(
+                storage_uri = %layer.storage_uri,
+                "skipping layer with suspicious storage_uri"
+            );
+            continue;
+        }
         let segment = data_path.join(&layer.storage_uri);
         if segment.exists() {
             if let Err(e) = std::fs::remove_file(&segment) {

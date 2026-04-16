@@ -65,18 +65,18 @@ def connect(
     if not _IDENT_RE.match(alias):
         raise ValueError(f"Invalid alias: {alias!r}. Must be a valid SQL identifier.")
 
+    def _sql_escape(s: str) -> str:
+        return s.replace("'", "''")
+
     duckdb_config.setdefault("allow_unsigned_extensions", "true")
     con = duckdb.connect(":memory:", config=duckdb_config)
 
     ext = extension_path or find_extension()
     if ext:
-        con.execute(f"LOAD '{ext}';")
+        con.execute(f"LOAD '{_sql_escape(ext)}';")
     else:
         con.execute("INSTALL openduck;")
         con.execute("LOAD openduck;")
-
-    def _sql_escape(s: str) -> str:
-        return s.replace("'", "''")
 
     safe_db = _sql_escape(db_name)
     safe_endpoint = _sql_escape(endpoint)

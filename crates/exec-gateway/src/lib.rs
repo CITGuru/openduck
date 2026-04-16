@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{collections::HashMap, sync::Mutex};
 
+pub use exec_proto::auth::validate_token;
 use exec_proto::openduck::v1::execution_service_client::ExecutionServiceClient;
 use exec_proto::openduck::v1::execution_service_server::{
     ExecutionService, ExecutionServiceServer,
@@ -26,8 +27,6 @@ use tokio_stream::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
-pub use exec_proto::auth::validate_token;
-
 
 /// Max concurrent fragment executions per gateway process (backpressure, M4).
 pub fn max_in_flight() -> usize {
@@ -43,7 +42,6 @@ pub fn hybrid_enabled() -> bool {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
-
 
 pub fn worker_base_urls() -> Vec<String> {
     std::env::var("OPENDUCK_WORKER_ADDRS")
@@ -355,7 +353,11 @@ impl ExecutionService for GatewayImpl {
 
         tokio::spawn(async move {
             let _permit = permit;
-            let mut client = match ExecutionServiceClient::connect(uri).await {
+            let channel = tonic::transport::Endpoint::from_shared(uri).map(|ep| {
+                ep.connect_timeout(std::time::Duration::from_secs(5))
+                    .timeout(std::time::Duration::from_secs(300))
+            });
+            let mut client = match async { ExecutionServiceClient::connect(channel?).await }.await {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx
@@ -419,7 +421,11 @@ impl ExecutionService for GatewayImpl {
             }));
         };
 
-        let mut client = match ExecutionServiceClient::connect(worker_uri).await {
+        let channel = tonic::transport::Endpoint::from_shared(worker_uri).map(|ep| {
+            ep.connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(10))
+        });
+        let mut client = match async { ExecutionServiceClient::connect(channel?).await }.await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(Response::new(CancelReply {
@@ -441,6 +447,7 @@ impl ExecutionService for GatewayImpl {
         request: Request<WorkerRegistration>,
     ) -> Result<Response<RegisterWorkerReply>, Status> {
         let reg = request.into_inner();
+        validate_token(&reg.access_token)?;
         if reg.endpoint.is_empty() {
             return Err(Status::invalid_argument("endpoint is required"));
         }
@@ -473,6 +480,7 @@ impl ExecutionService for GatewayImpl {
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatReply>, Status> {
         let hb = request.into_inner();
+        validate_token(&hb.access_token)?;
         let ack = self.registry.heartbeat(&hb.worker_id);
         if !ack {
             tracing::debug!(worker_id = %hb.worker_id, "heartbeat from unknown worker");
@@ -497,7 +505,10 @@ pub async fn serve_with_shutdown(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gw = GatewayImpl::new(workers);
     let registry = gw.registry.clone();
-    let svc = ExecutionServiceServer::new(gw);
+    const MAX_MSG_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+    let svc = ExecutionServiceServer::new(gw)
+        .max_decoding_message_size(MAX_MSG_SIZE)
+        .max_encoding_message_size(MAX_MSG_SIZE);
 
     let reaper = tokio::spawn(async move {
         loop {

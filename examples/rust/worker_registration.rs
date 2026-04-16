@@ -111,6 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             compute_context: "us-east-1".into(),
             max_concurrency: 8,
             tables: vec!["sales".into(), "orders".into()],
+            access_token: token.into(),
         }))
         .await?;
     println!(
@@ -126,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             compute_context: "eu-west-1".into(),
             max_concurrency: 4,
             tables: vec!["events".into(), "metrics".into()],
+            access_token: token.into(),
         }))
         .await?;
     println!(

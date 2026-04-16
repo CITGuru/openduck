@@ -681,14 +681,20 @@ fn arrow_to_duckdb_type(dt: &arrow::datatypes::DataType) -> &'static str {
 ///
 /// Uses DuckDB's Appender API (`append_record_batch`) for bulk loading instead of
 /// per-row INSERT statements, which is orders of magnitude faster.
+/// Double-quote a SQL identifier, escaping any embedded double-quotes.
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 fn materialize_batches(
     conn: &Connection,
     table_name: &str,
     batches: &[RecordBatch],
 ) -> Result<(), String> {
+    let safe_table = quote_ident(table_name);
     if batches.is_empty() {
         conn.execute_batch(&format!(
-            "CREATE TEMP TABLE {table_name} AS SELECT 1 WHERE false"
+            "CREATE TEMP TABLE {safe_table} AS SELECT 1 WHERE false"
         ))
         .map_err(|e| format!("create empty temp table: {e}"))?;
         return Ok(());
@@ -698,9 +704,15 @@ fn materialize_batches(
     let cols: Vec<String> = schema
         .fields()
         .iter()
-        .map(|f| format!("{} {}", f.name(), arrow_to_duckdb_type(f.data_type())))
+        .map(|f| {
+            format!(
+                "{} {}",
+                quote_ident(f.name()),
+                arrow_to_duckdb_type(f.data_type())
+            )
+        })
         .collect();
-    let create_sql = format!("CREATE TEMP TABLE {table_name} ({})", cols.join(", "));
+    let create_sql = format!("CREATE TEMP TABLE {safe_table} ({})", cols.join(", "));
     conn.execute_batch(&create_sql)
         .map_err(|e| format!("create temp table: {e}"))?;
 
