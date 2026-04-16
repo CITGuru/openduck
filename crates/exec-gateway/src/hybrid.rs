@@ -186,6 +186,42 @@ pub fn parse_openduck_run(hint: &str) -> Option<PlanNode> {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// FederationProvider — pluggable trait for self-describing compute backends
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// A compute backend that can execute SQL fragments. Implementations describe
+/// their capabilities so the planner and router can make informed decisions.
+///
+/// This is the OpenDuck equivalent of datafusion-federation's `FederationProvider`.
+pub trait FederationProvider: Send + Sync {
+    /// Unique identifier for this provider instance (e.g. worker_id).
+    fn id(&self) -> &str;
+
+    /// gRPC endpoint the gateway should use to reach this provider.
+    fn endpoint(&self) -> &str;
+
+    /// Opaque compute context (e.g. "region=us-east-1"). Providers with the
+    /// same context are co-located — their tables can be joined remotely.
+    fn compute_context(&self) -> &str;
+
+    /// Databases this provider can serve. Empty means any database.
+    fn databases(&self) -> &[String];
+
+    /// Tables this provider is authoritative for. Used by the planner to
+    /// determine remote vs local placement and co-location.
+    fn tables(&self) -> &[String];
+
+    /// Max concurrent executions (0 = unlimited).
+    fn max_concurrency(&self) -> u32;
+
+    /// Whether this provider can execute the given SQL dialect/feature.
+    /// Default: accepts everything.
+    fn supports_sql(&self, _sql: &str) -> bool {
+        true
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // Table source metadata — per-table origin tracking for automatic plan splitting
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -246,6 +282,21 @@ impl TableSourceRegistry {
             .values()
             .filter(|s| s.compute_context == ctx)
             .collect()
+    }
+
+    /// Populate this registry from a set of `FederationProvider`s. Each
+    /// provider's declared tables are registered with the provider's context.
+    pub fn sync_from_providers(&mut self, providers: &[&dyn FederationProvider]) {
+        for provider in providers {
+            for table in provider.tables() {
+                self.register(TableSource {
+                    table: table.clone(),
+                    provider: provider.id().to_string(),
+                    compute_context: provider.compute_context().to_string(),
+                    database: provider.databases().first().cloned().unwrap_or_default(),
+                });
+            }
+        }
     }
 }
 

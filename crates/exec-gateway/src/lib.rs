@@ -26,6 +26,8 @@ use tokio_stream::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
+pub use exec_proto::auth::validate_token;
+
 
 /// Max concurrent fragment executions per gateway process (backpressure, M4).
 pub fn max_in_flight() -> usize {
@@ -42,38 +44,6 @@ pub fn hybrid_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Validate `request_token` against the expected token from `OPENDUCK_TOKEN`.
-///
-/// - If `OPENDUCK_TOKEN` is unset or empty: dev mode — any token (including empty) is accepted.
-/// - If `OPENDUCK_TOKEN` is set: `request_token` must match (constant-time comparison).
-#[allow(clippy::result_large_err)]
-pub fn validate_token(request_token: &str) -> Result<(), Status> {
-    let expected = std::env::var("OPENDUCK_TOKEN").unwrap_or_default();
-    if expected.is_empty() {
-        return Ok(());
-    }
-    if request_token.is_empty() {
-        return Err(Status::unauthenticated(
-            "access_token required when OPENDUCK_TOKEN is set",
-        ));
-    }
-    if constant_time_eq(request_token.as_bytes(), expected.as_bytes()) {
-        Ok(())
-    } else {
-        Err(Status::unauthenticated("invalid access_token"))
-    }
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
 
 pub fn worker_base_urls() -> Vec<String> {
     std::env::var("OPENDUCK_WORKER_ADDRS")
@@ -99,7 +69,29 @@ pub struct RegisteredWorker {
     pub databases: Vec<String>,
     pub compute_context: String,
     pub max_concurrency: u32,
+    pub tables: Vec<String>,
     pub last_heartbeat: Instant,
+}
+
+impl hybrid::FederationProvider for RegisteredWorker {
+    fn id(&self) -> &str {
+        &self.worker_id
+    }
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+    fn compute_context(&self) -> &str {
+        &self.compute_context
+    }
+    fn databases(&self) -> &[String] {
+        &self.databases
+    }
+    fn tables(&self) -> &[String] {
+        &self.tables
+    }
+    fn max_concurrency(&self) -> u32 {
+        self.max_concurrency
+    }
 }
 
 /// Thread-safe worker registry. Workers register via `RegisterWorker` RPC;
@@ -147,27 +139,75 @@ impl WorkerRegistry {
         }
     }
 
-    /// Pick the best worker for `database`. Prefers workers that explicitly
-    /// list the database; falls back to round-robin over all workers.
-    pub fn pick(&self, database: &str) -> Option<String> {
+    /// Pick the best worker for the given `database` and `compute_context`.
+    ///
+    /// Priority: context+database match > context match > database match > round-robin.
+    pub fn pick(&self, database: &str, compute_context: &str) -> Option<String> {
         let guard = self.workers.lock().ok()?;
         if guard.is_empty() {
             return None;
         }
 
-        if !database.is_empty() {
-            let affinity: Vec<&RegisteredWorker> = guard
+        let has_ctx = !compute_context.is_empty();
+        let has_db = !database.is_empty();
+
+        // Tier 1: both context and database match
+        if has_ctx && has_db {
+            let both: Vec<&RegisteredWorker> = guard
                 .iter()
-                .filter(|w| w.databases.iter().any(|d| d == database))
+                .filter(|w| {
+                    w.compute_context == compute_context
+                        && w.databases.iter().any(|d| d == database)
+                })
                 .collect();
-            if !affinity.is_empty() {
-                let idx = self.next.fetch_add(1, Ordering::Relaxed) % affinity.len();
-                return Some(affinity[idx].endpoint.clone());
+            if !both.is_empty() {
+                let idx = self.next.fetch_add(1, Ordering::Relaxed) % both.len();
+                return Some(both[idx].endpoint.clone());
             }
         }
 
+        // Tier 2: context match only
+        if has_ctx {
+            let ctx: Vec<&RegisteredWorker> = guard
+                .iter()
+                .filter(|w| w.compute_context == compute_context)
+                .collect();
+            if !ctx.is_empty() {
+                let idx = self.next.fetch_add(1, Ordering::Relaxed) % ctx.len();
+                return Some(ctx[idx].endpoint.clone());
+            }
+        }
+
+        // Tier 3: database match only
+        if has_db {
+            let db: Vec<&RegisteredWorker> = guard
+                .iter()
+                .filter(|w| w.databases.iter().any(|d| d == database))
+                .collect();
+            if !db.is_empty() {
+                let idx = self.next.fetch_add(1, Ordering::Relaxed) % db.len();
+                return Some(db[idx].endpoint.clone());
+            }
+        }
+
+        // Tier 4: round-robin over all workers
         let idx = self.next.fetch_add(1, Ordering::Relaxed) % guard.len();
         Some(guard[idx].endpoint.clone())
+    }
+
+    /// Build a `TableSourceRegistry` from the live registered workers.
+    /// This bridges the gap between the runtime worker registry and the
+    /// planner's view of table locations.
+    pub fn to_table_source_registry(&self) -> hybrid::TableSourceRegistry {
+        let mut reg = hybrid::TableSourceRegistry::new();
+        if let Ok(guard) = self.workers.lock() {
+            let providers: Vec<&dyn hybrid::FederationProvider> = guard
+                .iter()
+                .map(|w| w as &dyn hybrid::FederationProvider)
+                .collect();
+            reg.sync_from_providers(&providers);
+        }
+        reg
     }
 
     pub fn len(&self) -> usize {
@@ -207,10 +247,10 @@ impl GatewayImpl {
         Self::new(worker_base_urls())
     }
 
-    /// Select a worker endpoint: prefer registry affinity, then registry
-    /// round-robin, then static list round-robin.
-    fn select_worker(&self, database: &str) -> Option<String> {
-        if let Some(ep) = self.registry.pick(database) {
+    /// Select a worker endpoint: prefer registry affinity (context+database),
+    /// then registry round-robin, then static list round-robin.
+    fn select_worker(&self, database: &str, compute_context: &str) -> Option<String> {
+        if let Some(ep) = self.registry.pick(database, compute_context) {
             return Some(ep);
         }
         if self.static_workers.is_empty() {
@@ -238,8 +278,18 @@ impl ExecutionService for GatewayImpl {
         }
 
         if hybrid_enabled() {
+            let table_sources = self.registry.to_table_source_registry();
             if let Ok(sql) = std::str::from_utf8(&inner.plan) {
-                if let Some(node) = hybrid::parse_openduck_run(sql) {
+                if let Some(mut node) = hybrid::parse_openduck_run(sql) {
+                    let remote_tables: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    hybrid::resolve_auto_with_registry(
+                        &mut node,
+                        &remote_tables,
+                        Some(&table_sources),
+                    );
+                    hybrid::pushdown_federable_subplans(&mut node, &table_sources);
+
                     let rewritten = hybrid::insert_bridges(node.clone());
                     let explain = hybrid::explain_annotated(&rewritten);
                     tracing::debug!(plan = %explain, "hybrid plan");
@@ -262,7 +312,16 @@ impl ExecutionService for GatewayImpl {
                             hybrid::Placement::Auto => {}
                         }
                     }
-                } else if let Some(parsed) = hybrid::parse_compound_hint(sql) {
+                } else if let Some(mut parsed) = hybrid::parse_compound_hint(sql) {
+                    let remote_tables: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    hybrid::resolve_auto_with_registry(
+                        &mut parsed,
+                        &remote_tables,
+                        Some(&table_sources),
+                    );
+                    hybrid::pushdown_federable_subplans(&mut parsed, &table_sources);
+
                     let explain = hybrid::explain_annotated(&parsed);
                     tracing::debug!(plan = %explain, "hybrid compound plan");
                     inner.plan = hybrid::extract_remote_sql(&parsed)
@@ -273,7 +332,7 @@ impl ExecutionService for GatewayImpl {
             }
         }
 
-        let uri = self.select_worker(&inner.database).ok_or_else(|| {
+        let uri = self.select_worker(&inner.database, &inner.compute_context).ok_or_else(|| {
             Status::failed_precondition(
                 "no workers available; set OPENDUCK_WORKER_ADDRS or register workers via RegisterWorker RPC",
             )
@@ -403,6 +462,7 @@ impl ExecutionService for GatewayImpl {
             databases: reg.databases,
             compute_context: reg.compute_context,
             max_concurrency: reg.max_concurrency,
+            tables: reg.tables,
             last_heartbeat: Instant::now(),
         });
         Ok(Response::new(RegisterWorkerReply { accepted: true }))

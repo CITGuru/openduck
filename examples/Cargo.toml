@@ -57,6 +57,14 @@ path = "rust/compute_pushdown.rs"
 name = "worker_registration"
 path = "rust/worker_registration.rs"
 
+[[example]]
+name = "federation_provider"
+path = "rust/federation_provider.rs"
+
+[[example]]
+name = "gc_walkthrough"
+path = "rust/gc_walkthrough.rs"
+
 [dependencies]
 exec-worker = { path = "../crates/exec-worker" }
 exec-gateway = { path = "../crates/exec-gateway" }

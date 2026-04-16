@@ -8,6 +8,7 @@ license.workspace = true
 tonic.workspace = true
 prost.workspace = true
 prost-types.workspace = true
+subtle = "2"
 
 [build-dependencies]
 tonic-build = "0.12"

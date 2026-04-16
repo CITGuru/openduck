@@ -23,6 +23,8 @@ use tokio_stream::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
+use exec_proto::auth::validate_token;
+
 
 /// Pinned DuckDB version for the worker and C++ extension (see `extensions/openduck/DUCKDB_VERSION`).
 pub const DUCKDB_SEMVER: &str = "1.5.0";
@@ -71,6 +73,8 @@ pub struct WorkerConfig {
     pub compute_context: String,
     /// Max concurrent executions (0 = unlimited).
     pub max_concurrency: u32,
+    /// Tables this worker is authoritative for (used for planner co-location).
+    pub tables: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -94,36 +98,6 @@ impl Default for WorkerService {
     }
 }
 
-/// Validate `request_token` against `OPENDUCK_TOKEN`.
-/// Dev mode (unset/empty `OPENDUCK_TOKEN`) accepts any token.
-#[allow(clippy::result_large_err)]
-fn validate_token(request_token: &str) -> Result<(), Status> {
-    let expected = std::env::var("OPENDUCK_TOKEN").unwrap_or_default();
-    if expected.is_empty() {
-        return Ok(());
-    }
-    if request_token.is_empty() {
-        return Err(Status::unauthenticated(
-            "access_token required when OPENDUCK_TOKEN is set",
-        ));
-    }
-    if constant_time_eq(request_token.as_bytes(), expected.as_bytes()) {
-        Ok(())
-    } else {
-        Err(Status::unauthenticated("invalid access_token"))
-    }
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
 
 fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
     let conn = match &config.storage {
@@ -167,8 +141,10 @@ fn open_connection(config: &WorkerConfig) -> Result<Connection, String> {
     {
         conn.execute_batch("INSTALL ducklake; LOAD ducklake;")
             .map_err(|e| format!("ducklake install/load: {e}"))?;
+        let safe_data = data_path.replace('\'', "''");
+        let safe_meta = meta_url.replace('\'', "''");
         let attach_sql = format!(
-            "ATTACH 'ducklake:lake' (DATA_PATH '{data_path}', METADATA_PATH '{meta_url}');"
+            "ATTACH 'ducklake:lake' (DATA_PATH '{safe_data}', METADATA_PATH '{safe_meta}');"
         );
         conn.execute_batch(&attach_sql)
             .map_err(|e| format!("ducklake attach: {e}"))?;

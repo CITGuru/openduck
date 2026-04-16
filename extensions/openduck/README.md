@@ -111,19 +111,20 @@ od:<database>?endpoint=<url>&token=<token>
 ### Prerequisites
 
 - CMake 3.5+, C++17 compiler
-- [vcpkg](https://vcpkg.io/en/getting-started) for gRPC, protobuf, Arrow
+- gRPC, Protobuf, and Apache Arrow C++ libraries
+
+**macOS (Homebrew):**
+
+```sh
+brew install protobuf grpc apache-arrow
+```
+
+**Other platforms (vcpkg):**
 
 ```sh
 git clone https://github.com/Microsoft/vcpkg.git
 ./vcpkg/bootstrap-vcpkg.sh
 export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
-```
-
-On macOS:
-
-```sh
-brew install bison
-export PATH="/opt/homebrew/opt/bison/bin:$PATH"
 ```
 
 ### Build

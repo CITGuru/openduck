@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Optional
 
 import duckdb
 
 from openduck.utils import find_extension, parse_uri, URI_RE, EXTENSION_SEARCH_PATHS
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def connect(
     database: str = "default",
@@ -59,6 +62,9 @@ def connect(
             "No token provided. Pass token= or set the OPENDUCK_TOKEN env var."
         )
 
+    if not _IDENT_RE.match(alias):
+        raise ValueError(f"Invalid alias: {alias!r}. Must be a valid SQL identifier.")
+
     duckdb_config.setdefault("allow_unsigned_extensions", "true")
     con = duckdb.connect(":memory:", config=duckdb_config)
 
@@ -69,9 +75,15 @@ def connect(
         con.execute("INSTALL openduck;")
         con.execute("LOAD openduck;")
 
-    query_params = f"?endpoint={endpoint}&token={token}"
-    con.execute(f"ATTACH 'openduck:{db_name}{query_params}' AS {alias};")
-    con.execute(f"USE {alias};")
+    def _sql_escape(s: str) -> str:
+        return s.replace("'", "''")
+
+    safe_db = _sql_escape(db_name)
+    safe_endpoint = _sql_escape(endpoint)
+    safe_token = _sql_escape(token)
+    query_params = f"?endpoint={safe_endpoint}&token={safe_token}"
+    con.execute(f"ATTACH 'openduck:{safe_db}{query_params}' AS \"{alias}\";")
+    con.execute(f'USE "{alias}";')
 
     return OpenDuckConnection(con, alias=alias, database=db_name)
 

@@ -17,9 +17,9 @@ async fn execute_fragment_requires_token() {
         .execute_fragment(ExecuteFragmentRequest {
             plan: vec![],
             database: "x".into(),
-            snapshot_id: None,
             access_token: String::new(),
             execution_id: "smoke-unauth".into(),
+            ..Default::default()
         })
         .await
         .expect_err("expected unauthenticated");
@@ -41,9 +41,9 @@ async fn execute_fragment_accepts_access_token() {
         .execute_fragment(ExecuteFragmentRequest {
             plan: vec![],
             database: "x".into(),
-            snapshot_id: None,
             access_token: "test".into(),
             execution_id: "smoke-auth".into(),
+            ..Default::default()
         })
         .await
         .expect("stream")

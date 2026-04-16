@@ -25,6 +25,9 @@ message ExecuteFragmentRequest {
   string access_token = 4;
   // Client or gateway assigned execution id for cancel routing.
   string execution_id = 5;
+  // Preferred compute context for routing (e.g. "region=us-east-1").
+  // If set, the gateway prefers workers matching this context.
+  string compute_context = 6;
 }
 
 message ExecuteFragmentChunk {
@@ -63,6 +66,9 @@ message WorkerRegistration {
   string compute_context = 4;
   // Max concurrent executions this worker accepts (0 = unlimited).
   uint32 max_concurrency = 5;
+  // Tables this worker is authoritative for (used by the planner for
+  // remote placement and co-location decisions). Empty = discover at query time.
+  repeated string tables = 6;
 }
 
 message RegisterWorkerReply {

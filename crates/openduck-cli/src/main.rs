@@ -313,15 +313,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
         .init();
 
-    // SAFETY: called before any worker threads are spawned; main thread only.
+    // Called before any worker threads are spawned; main thread only.
     if let Some(tok) = &cli.token {
-        unsafe { std::env::set_var("OPENDUCK_TOKEN", tok) };
+        std::env::set_var("OPENDUCK_TOKEN", tok);
     }
     if cli.hybrid {
-        unsafe { std::env::set_var("OPENDUCK_HYBRID", "1") };
+        std::env::set_var("OPENDUCK_HYBRID", "1");
     }
     if cli.max_in_flight != 64 {
-        unsafe { std::env::set_var("OPENDUCK_MAX_IN_FLIGHT", cli.max_in_flight.to_string()) };
+        std::env::set_var("OPENDUCK_MAX_IN_FLIGHT", cli.max_in_flight.to_string());
     }
 
     match cli.command {
@@ -544,6 +544,7 @@ async fn register_with_gateway(
                     databases: config.databases.clone(),
                     compute_context: config.compute_context.clone(),
                     max_concurrency: config.max_concurrency,
+                    tables: config.tables.clone(),
                 };
                 match client.register_worker(tonic::Request::new(reg)).await {
                     Ok(reply) => {
@@ -617,6 +618,7 @@ async fn run_query(
             snapshot_id: None,
             access_token: token.into(),
             execution_id: String::new(),
+            compute_context: String::new(),
         }))
         .await?
         .into_inner();
@@ -726,6 +728,7 @@ async fn run_status(endpoint: &str, token: &str) -> Result<(), Box<dyn std::erro
             snapshot_id: None,
             access_token: token.into(),
             execution_id: String::new(),
+            compute_context: String::new(),
         }))
         .await;
 

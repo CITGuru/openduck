@@ -33,10 +33,9 @@ async fn gateway_forwards_sql_and_arrow() {
     let mut stream = client
         .execute_fragment(Request::new(ExecuteFragmentRequest {
             plan: b"SELECT 42 AS v".to_vec(),
-            database: String::new(),
-            snapshot_id: None,
             access_token: "test-token".into(),
             execution_id: "gw-roundtrip-1".into(),
+            ..Default::default()
         }))
         .await
         .expect("execute_fragment")
@@ -66,12 +65,10 @@ async fn gateway_forwards_cancel_to_worker() {
     let execution_id = "gw-cancel-1".to_string();
     let mut stream = client
         .execute_fragment(Request::new(ExecuteFragmentRequest {
-            // Generate enough output to increase cancel window.
             plan: b"SELECT * FROM range(500000000)".to_vec(),
-            database: String::new(),
-            snapshot_id: None,
             access_token: "test-token".into(),
             execution_id: execution_id.clone(),
+            ..Default::default()
         }))
         .await
         .expect("execute_fragment")
@@ -112,10 +109,9 @@ async fn wrong_token_rejected() {
     let result = client
         .execute_fragment(Request::new(ExecuteFragmentRequest {
             plan: b"SELECT 1".to_vec(),
-            database: String::new(),
-            snapshot_id: None,
             access_token: "wrong-secret".into(),
             execution_id: "auth-test-bad".into(),
+            ..Default::default()
         }))
         .await;
 
@@ -132,10 +128,9 @@ async fn wrong_token_rejected() {
     let result = client
         .execute_fragment(Request::new(ExecuteFragmentRequest {
             plan: b"SELECT 42".to_vec(),
-            database: String::new(),
-            snapshot_id: None,
             access_token: "test-token".into(),
             execution_id: "auth-test-ok".into(),
+            ..Default::default()
         }))
         .await;
 
