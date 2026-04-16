@@ -38,7 +38,7 @@ The extension implements DuckDB's `StorageExtension` and `Catalog` interfaces. R
 
 ### Open protocol
 
-OpenDuck's protocol is intentionally minimal: two RPCs defined in [`execution.proto`](proto/openduck/v1/execution.proto). The first one to execute a query, and the other to stream results back as Arrow IPC batches.
+OpenDuck's protocol is intentionally minimal and defined in [`execution.proto`](proto/openduck/v1/execution.proto). The data plane is two RPCs: one to execute a query and stream Arrow IPC batches back, another to cancel a running execution. Two additional RPCs handle worker lifecycle (registration and heartbeat) so the gateway can route queries by database affinity and compute context.
 
 Because the protocol is open and simple, you're not locked into a single backend. Any service that speaks gRPC and returns Arrow can serve as an OpenDuck-compatible backend. Run the included Rust gateway, replace it with your own implementation, or plug in an entirely different execution engine — the client and extension don't care what's on the other side.
 
@@ -62,14 +62,17 @@ Because the protocol is open and simple, you're not locked into a single backend
                   │
       ┌───────────▼───────────┐
       │  Gateway (Rust)       │
-      │  - auth, routing      │
-      │  - plan splitting     │     ┌──────────────┐
-      │  - backpressure       │────▶│  Worker 1    │
-      │                       │     │  (DuckDB)    │
+      │  - token auth         │
+      │  - worker registry    │
+      │  - affinity routing   │     ┌──────────────┐
+      │  - plan splitting     │────▶│  Worker 1    │
+      │  - backpressure       │◀────│  (DuckDB)    │
+      │                       │     │  RegisterWorker
       │                       │     └──────────────┘
       │                       │     ┌──────────────┐
       │                       │────▶│  Worker N    │
-      │                       │     │  (DuckDB)    │
+      │                       │◀────│  (DuckDB)    │
+      │                       │     │  Heartbeat   │
       └───────────────────────┘     └──────────────┘
               │
     ┌─────────┴─────────┐
@@ -180,20 +183,27 @@ See [`examples/python/duckdb_sdk_ducklake.py`](examples/python/duckdb_sdk_duckla
 
 ```
 crates/
-  exec-gateway/     Gateway — auth, routing, hybrid plan splitting
+  exec-gateway/     Gateway — auth, worker registry, routing, hybrid plan splitting
   exec-worker/      Worker — embedded DuckDB, Arrow IPC streaming
-  exec-proto/       Protobuf/tonic codegen
-  openduck-cli/     Unified CLI (openduck serve|gateway|worker)
-  diff-*/           Differential storage pipeline (layers, metadata, FUSE)
+  exec-proto/       Protobuf/tonic codegen + shared auth module
+  openduck-cli/     Unified CLI (openduck serve|gateway|worker|query|cancel|snapshot)
+  openduck-metrics/ OpenTelemetry metrics (optional OTLP exporter)
+  diff-core/        Core types and StorageBackend trait
+  diff-metadata/    Postgres metadata repo, GC, PgStorageBackend
+  diff-layer-fs/    Append-only on-disk segment files
+  diff-blob/        Sealed layer upload to S3-compatible object storage
+  diff-bridge/      C ABI static library for the DuckDB extension
+  diff-fuse/        Linux FUSE adapter over StorageBackend
 
 extensions/
-  openduck/ DuckDB C++ extension (StorageExtension + Catalog)
+  openduck/         DuckDB C++ extension (StorageExtension + Catalog)
 
 clients/
   python/           openduck Python package (pip install -e clients/python)
 
 proto/
   openduck/v1/      Protocol definition (execution.proto)
+
 ```
 
 ## OpenDuck vs MotherDuck
@@ -226,7 +236,7 @@ Arrow Flight SQL is a generic database protocol — "JDBC/ODBC over Arrow." Open
 | **Integration**      | Separate client driver          | DuckDB StorageExtension + Catalog            |
 | **Catalog**          | Server-side (`GetTables`, etc.) | Extension-side (DuckDB catalog entries)      |
 | **Execution**        | Full query on server            | Hybrid — split across local and remote       |
-| **Protocol surface** | ~15 RPCs                        | 2 RPCs                                       |
+| **Protocol surface** | ~15 RPCs                        | 4 RPCs (2 data plane + 2 worker lifecycle)   |
 | **Plan format**      | SQL only                        | SQL (M2), structured plan IR (M3)            |
 | **Optimizer**        | Client-side, unaware            | DuckDB optimizer sees remote tables natively |
 

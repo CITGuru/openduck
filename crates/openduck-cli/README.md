@@ -183,6 +183,32 @@ Supported keys: `token`, `listen`, `worker_listen`, `hybrid`, `max_in_flight`, `
 | `DATABASE_URL` | Postgres URL for differential storage (overridden by `--postgres`) |
 | `RUST_LOG` | Standard tracing filter (overridden by `-v`/`-vv`) |
 
+### `openduck gc`
+
+Garbage-collects unreferenced layers and compacts extents. Requires a running Postgres instance with OpenDuck migrations applied.
+
+```bash
+# Dry run — list candidates without deleting
+openduck gc --postgres postgres://user:pass@localhost/meta --db mydb --data-dir /var/openduck/data --dry-run
+
+# Actually delete orphaned layers and compact extents
+openduck gc --postgres postgres://user:pass@localhost/meta --db mydb --data-dir /var/openduck/data
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--postgres <URL>` | `$DATABASE_URL` | Postgres URL for metadata |
+| `--db <NAME>` | | Database name |
+| `--data-dir <PATH>` | | Data directory for storage layers (needed to delete segment files) |
+| `--dry-run` | off | List candidates without deleting |
+
+The GC command:
+
+1. Compacts extents (merges adjacent extents in the same layer)
+2. Identifies sealed layers with no snapshot references
+3. Validates `storage_uri` paths (rejects absolute paths and `..` components)
+4. Deletes orphaned layer files from disk and metadata from Postgres
+
 ## Graceful shutdown
 
 In default mode (gateway + worker), pressing Ctrl-C sends a shutdown signal to both services. In-flight requests are given up to 5 seconds to drain before the process exits.

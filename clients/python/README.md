@@ -189,3 +189,17 @@ con.sql("SELECT * FROM cloud.users").show()
 | `.raw` | `DuckDBPyConnection` | Access the underlying DuckDB connection |
 | `.alias` | `str` | The SQL alias for the remote database |
 | `.database` | `str` | The remote database name |
+
+## Security
+
+The `connect()` function validates and escapes all parameters before interpolating them into SQL statements:
+
+| Parameter | Validation |
+|-----------|------------|
+| `alias` | Strict identifier check (alphanumeric + underscores only); double-quoted in SQL |
+| `db_name` | Single-quote-escaped (`'` → `''`) |
+| `token` | Single-quote-escaped |
+| `endpoint` | Single-quote-escaped |
+| `extension_path` | Single-quote-escaped |
+
+This prevents SQL injection through malicious parameter values. If `alias` contains invalid characters, `connect()` raises a `ValueError`.

@@ -73,6 +73,10 @@ duckdb -unsigned -c "
 | `rust/secrets_and_storage` | DuckDB secrets for storage configuration — create, list, redact, URI params | `cargo run --example secrets_and_storage` |
 | `rust/bridge_storage` | C ABI bridge to Rust storage — write, read, fsync, overlay resolution (needs Postgres) | `cargo run --example bridge_storage` |
 | `rust/hybrid_execution` | End-to-end hybrid LOCAL+REMOTE join — worker data + local data via Arrow IPC | `OPENDUCK_TOKEN=demo cargo run --example hybrid_execution` |
+| `rust/compute_pushdown` | Federation / `TableSourceRegistry` plan optimization (no servers needed) | `cargo run --example compute_pushdown` |
+| `rust/worker_registration` | `RegisterWorker` RPC, affinity routing, fallback behavior | `OPENDUCK_TOKEN=demo cargo run --example worker_registration` |
+| `rust/federation_provider` | `FederationProvider` trait, `compute_context` routing tiers | `OPENDUCK_TOKEN=demo cargo run --example federation_provider` |
+| `rust/gc_walkthrough` | In-memory GC / layers narrative — how garbage collection works | `cargo run --example gc_walkthrough` |
 | `rust/snapshot_reads` | Point-in-time reads — write, seal, diverge, read-at-snapshot (needs Postgres) | `cargo run --example snapshot_reads` |
 
 ## What each example demonstrates
@@ -175,6 +179,42 @@ The full hybrid execution flow with real gRPC:
 3. Materializes remote results into a local temp table
 4. Executes the local join against local + materialized data
 5. Verifies the result matches a single-process baseline
+
+### `rust/compute_pushdown` — Federation plan optimization
+
+Demonstrates how `TableSourceRegistry` enables compute pushdown without running any servers:
+
+1. Register tables with specific workers
+2. Planner resolves `Placement::Auto` using table ownership
+3. Filters and projections are pushed to the authoritative worker
+4. Shows the difference between co-located and cross-worker joins
+
+### `rust/worker_registration` — Worker self-registration
+
+Shows the `RegisterWorker` RPC and how the gateway routes queries:
+
+1. Workers register with database affinity and table declarations
+2. Gateway routes by database match, then table co-location
+3. Fallback to round-robin when no affinity match
+4. Demonstrates `max_concurrency` capacity-aware routing
+
+### `rust/federation_provider` — Routing tiers
+
+Demonstrates the `FederationProvider` trait for multi-tier routing:
+
+1. Exact table match routing
+2. Database prefix routing (e.g. `analytics.*`)
+3. Compute context matching (e.g. `region=us-east-1`)
+4. Fallback routing across all healthy workers
+
+### `rust/gc_walkthrough` — Garbage collection
+
+Walks through how garbage collection works in differential storage:
+
+1. Create layers and seal snapshots
+2. Identify orphaned layers with no snapshot references
+3. Compact extents to reduce metadata overhead
+4. Clean up sealed layers that are no longer reachable
 
 ### `rust/snapshot_reads` — Point-in-time consistency
 

@@ -22,7 +22,7 @@ The gateway includes a plan splitter that assigns `LOCAL` or `REMOTE` placement 
 ```
 
 **3. Open protocol — anyone can implement the backend.**
-The wire contract is two RPCs in a single `.proto` file. Any service that accepts SQL and streams Arrow IPC batches is a compatible backend. The extension is the universal DuckDB client.
+The data plane is two RPCs in a single `.proto` file (plus two for worker lifecycle). Any service that accepts SQL and streams Arrow IPC batches is a compatible backend. The extension is the universal DuckDB client.
 
 ## Usage
 
@@ -150,9 +150,20 @@ make test
 
 The extension communicates with backends using the OpenDuck Protocol defined in [`execution.proto`](../../proto/openduck/v1/execution.proto):
 
+### Data plane
+
 | RPC | Purpose |
 |-----|---------|
-| `ExecuteFragment` | Send SQL (M2) or plan IR (M3), stream back Arrow IPC batches |
-| `CancelExecution` | Cancel a running execution by ID |
+| `ExecuteFragment` | Send SQL (or plan IR), stream back Arrow IPC batches |
+| `CancelExecution` | Cancel a running execution by ID (requires `access_token`) |
 
-Any service implementing this interface is a compatible backend. See the [top-level README](../../README.md) for comparisons with Arrow Flight SQL and MotherDuck.
+### Worker lifecycle (gateway-side)
+
+| RPC | Purpose |
+|-----|---------|
+| `RegisterWorker` | Worker self-registers with database affinity and capabilities |
+| `Heartbeat` | Worker sends periodic keepalives to maintain registration |
+
+All RPCs validate `access_token` when `OPENDUCK_TOKEN` is set. The extension sends the token on both `ExecuteFragment` and `CancelExecution` calls.
+
+Any service implementing the data plane RPCs is a compatible backend. See the [top-level README](../../README.md) for comparisons with Arrow Flight SQL and MotherDuck.
