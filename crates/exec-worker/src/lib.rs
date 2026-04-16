@@ -375,7 +375,7 @@ impl ExecutionService for WorkerService {
         let hb = request.into_inner();
         validate_token(&hb.access_token)?;
         Ok(Response::new(HeartbeatReply {
-            acknowledged: hb.worker_id.len() > 0,
+            acknowledged: !hb.worker_id.is_empty(),
         }))
     }
 }
