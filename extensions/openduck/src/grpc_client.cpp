@@ -29,10 +29,21 @@ struct GrpcClient::Impl {
   std::unique_ptr<::openduck::v1::ExecutionService::Stub> stub;
 };
 
+static std::string StripScheme(const std::string &endpoint) {
+  if (endpoint.rfind("http://", 0) == 0) {
+    return endpoint.substr(7);
+  }
+  if (endpoint.rfind("https://", 0) == 0) {
+    return endpoint.substr(8);
+  }
+  return endpoint;
+}
+
 GrpcClient::GrpcClient(const std::string &endpoint)
     : impl_(std::make_unique<Impl>()) {
+  auto target = StripScheme(endpoint);
   impl_->channel =
-      grpc::CreateChannel(endpoint, grpc::InsecureChannelCredentials());
+      grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
   impl_->stub = ::openduck::v1::ExecutionService::NewStub(impl_->channel);
 }
 

@@ -275,6 +275,12 @@ impl ExecutionService for GatewayImpl {
             inner.execution_id = Uuid::new_v4().to_string();
         }
 
+        tracing::info!(
+            execution_id = %inner.execution_id,
+            database = %inner.database,
+            "gateway received execute_fragment"
+        );
+
         if hybrid_enabled() {
             let table_sources = self.registry.to_table_source_registry();
             if let Ok(sql) = std::str::from_utf8(&inner.plan) {
@@ -331,10 +337,17 @@ impl ExecutionService for GatewayImpl {
         }
 
         let uri = self.select_worker(&inner.database, &inner.compute_context).ok_or_else(|| {
+            tracing::error!(execution_id = %inner.execution_id, "no workers available");
             Status::failed_precondition(
                 "no workers available; set OPENDUCK_WORKER_ADDRS or register workers via RegisterWorker RPC",
             )
         })?;
+
+        tracing::info!(
+            execution_id = %inner.execution_id,
+            worker = %uri,
+            "routing to worker"
+        );
 
         let execution_id = inner.execution_id.clone();
         if let Ok(mut guard) = self.executions.lock() {
@@ -405,6 +418,7 @@ impl ExecutionService for GatewayImpl {
     ) -> Result<Response<CancelReply>, Status> {
         let cancel = request.into_inner();
         validate_token(&cancel.access_token)?;
+        tracing::info!(execution_id = %cancel.execution_id, "gateway received cancel_execution");
         if cancel.execution_id.is_empty() {
             return Ok(Response::new(CancelReply {
                 acknowledged: false,

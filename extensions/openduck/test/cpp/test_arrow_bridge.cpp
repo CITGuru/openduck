@@ -288,3 +288,229 @@ TEST_CASE("CopyBatchToDataChunk handles null values", "[arrow_bridge]") {
   REQUIRE(chunk.data[1].GetValue(1).GetValue<duckdb::string>() == "bob");
   REQUIRE(chunk.data[1].GetValue(2).IsNull());
 }
+
+// ── CopyBatchToDataChunkProjected ────────────────────────────────────────────
+
+TEST_CASE("Projected copy maps columns correctly", "[arrow_bridge]") {
+  // Arrow batch: [id(int32), name(utf8), score(int64)]
+  auto schema = arrow::schema({
+      arrow::field("id", arrow::int32()),
+      arrow::field("name", arrow::utf8()),
+      arrow::field("score", arrow::int64()),
+  });
+
+  arrow::Int32Builder id_b;
+  arrow::StringBuilder name_b;
+  arrow::Int64Builder score_b;
+  REQUIRE(id_b.AppendValues({10, 20}).ok());
+  REQUIRE(name_b.AppendValues({"alice", "bob"}).ok());
+  REQUIRE(score_b.AppendValues({100, 200}).ok());
+
+  auto batch = arrow::RecordBatch::Make(
+      schema, 2,
+      {id_b.Finish().ValueOrDie(), name_b.Finish().ValueOrDie(),
+       score_b.Finish().ValueOrDie()});
+
+  SECTION("identity mapping — all columns in order") {
+    duckdb::vector<duckdb::LogicalType> types = {
+        duckdb::LogicalType::INTEGER, duckdb::LogicalType::VARCHAR,
+        duckdb::LogicalType::BIGINT};
+    duckdb::DataChunk chunk;
+    chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+    std::vector<int> mapping = {0, 1, 2};
+    auto rows = openduck::CopyBatchToDataChunkProjected(batch, chunk, mapping);
+    REQUIRE(rows == 2);
+    REQUIRE(chunk.data[0].GetValue(0).GetValue<int32_t>() == 10);
+    REQUIRE(chunk.data[1].GetValue(1).GetValue<duckdb::string>() == "bob");
+    REQUIRE(chunk.data[2].GetValue(0).GetValue<int64_t>() == 100);
+  }
+
+  SECTION("subset — only name column") {
+    duckdb::vector<duckdb::LogicalType> types = {duckdb::LogicalType::VARCHAR};
+    duckdb::DataChunk chunk;
+    chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+    std::vector<int> mapping = {1}; // batch column 1 = name
+    auto rows = openduck::CopyBatchToDataChunkProjected(batch, chunk, mapping);
+    REQUIRE(rows == 2);
+    REQUIRE(chunk.data[0].GetValue(0).GetValue<duckdb::string>() == "alice");
+    REQUIRE(chunk.data[0].GetValue(1).GetValue<duckdb::string>() == "bob");
+  }
+
+  SECTION("reordered — score, id (skip name)") {
+    duckdb::vector<duckdb::LogicalType> types = {
+        duckdb::LogicalType::BIGINT, duckdb::LogicalType::INTEGER};
+    duckdb::DataChunk chunk;
+    chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+    std::vector<int> mapping = {2, 0}; // batch col 2=score, 0=id
+    auto rows = openduck::CopyBatchToDataChunkProjected(batch, chunk, mapping);
+    REQUIRE(rows == 2);
+    REQUIRE(chunk.data[0].GetValue(0).GetValue<int64_t>() == 100);
+    REQUIRE(chunk.data[1].GetValue(0).GetValue<int32_t>() == 10);
+  }
+}
+
+TEST_CASE("Projected copy handles row_id virtual column (-1)",
+          "[arrow_bridge]") {
+  auto schema = arrow::schema({arrow::field("name", arrow::utf8())});
+
+  arrow::StringBuilder name_b;
+  REQUIRE(name_b.AppendValues({"x", "y", "z"}).ok());
+  auto batch = arrow::RecordBatch::Make(
+      schema, 3, {name_b.Finish().ValueOrDie()});
+
+  // Output chunk: [row_id(BIGINT), name(VARCHAR)]
+  duckdb::vector<duckdb::LogicalType> types = {
+      duckdb::LogicalType::BIGINT, duckdb::LogicalType::VARCHAR};
+  duckdb::DataChunk chunk;
+  chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+  std::vector<int> mapping = {-1, 0}; // -1 = row_id, 0 = name
+  auto rows = openduck::CopyBatchToDataChunkProjected(batch, chunk, mapping);
+  REQUIRE(rows == 3);
+
+  // row_id should be filled with row indices 0, 1, 2
+  REQUIRE(chunk.data[0].GetValue(0).GetValue<int64_t>() == 0);
+  REQUIRE(chunk.data[0].GetValue(1).GetValue<int64_t>() == 1);
+  REQUIRE(chunk.data[0].GetValue(2).GetValue<int64_t>() == 2);
+
+  REQUIRE(chunk.data[1].GetValue(0).GetValue<duckdb::string>() == "x");
+  REQUIRE(chunk.data[1].GetValue(1).GetValue<duckdb::string>() == "y");
+  REQUIRE(chunk.data[1].GetValue(2).GetValue<duckdb::string>() == "z");
+}
+
+TEST_CASE("Projected copy returns 0 for null batch", "[arrow_bridge]") {
+  duckdb::vector<duckdb::LogicalType> types = {duckdb::LogicalType::INTEGER};
+  duckdb::DataChunk chunk;
+  chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+  std::vector<int> mapping = {0};
+  auto rows = openduck::CopyBatchToDataChunkProjected(nullptr, chunk, mapping);
+  REQUIRE(rows == 0);
+}
+
+// ── Wide type coverage for CopyBatchToDataChunk ──────────────────────────────
+
+TEST_CASE("CopyBatchToDataChunk handles all integer widths", "[arrow_bridge]") {
+  auto schema = arrow::schema({
+      arrow::field("i8", arrow::int8()),
+      arrow::field("i16", arrow::int16()),
+      arrow::field("i32", arrow::int32()),
+      arrow::field("i64", arrow::int64()),
+      arrow::field("u8", arrow::uint8()),
+      arrow::field("u16", arrow::uint16()),
+      arrow::field("u32", arrow::uint32()),
+      arrow::field("u64", arrow::uint64()),
+  });
+
+  arrow::Int8Builder b1;
+  arrow::Int16Builder b2;
+  arrow::Int32Builder b3;
+  arrow::Int64Builder b4;
+  arrow::UInt8Builder b5;
+  arrow::UInt16Builder b6;
+  arrow::UInt32Builder b7;
+  arrow::UInt64Builder b8;
+  REQUIRE(b1.Append(-1).ok());
+  REQUIRE(b2.Append(-2).ok());
+  REQUIRE(b3.Append(-3).ok());
+  REQUIRE(b4.Append(-4).ok());
+  REQUIRE(b5.Append(5).ok());
+  REQUIRE(b6.Append(6).ok());
+  REQUIRE(b7.Append(7).ok());
+  REQUIRE(b8.Append(8).ok());
+
+  auto batch = arrow::RecordBatch::Make(
+      schema, 1,
+      {b1.Finish().ValueOrDie(), b2.Finish().ValueOrDie(),
+       b3.Finish().ValueOrDie(), b4.Finish().ValueOrDie(),
+       b5.Finish().ValueOrDie(), b6.Finish().ValueOrDie(),
+       b7.Finish().ValueOrDie(), b8.Finish().ValueOrDie()});
+
+  duckdb::vector<duckdb::LogicalType> types = {
+      duckdb::LogicalType::TINYINT, duckdb::LogicalType::SMALLINT,
+      duckdb::LogicalType::INTEGER, duckdb::LogicalType::BIGINT,
+      duckdb::LogicalType::UTINYINT, duckdb::LogicalType::USMALLINT,
+      duckdb::LogicalType::UINTEGER, duckdb::LogicalType::UBIGINT};
+  duckdb::DataChunk chunk;
+  chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+  auto rows = openduck::CopyBatchToDataChunk(batch, chunk);
+  REQUIRE(rows == 1);
+  REQUIRE(chunk.data[0].GetValue(0).GetValue<int8_t>() == -1);
+  REQUIRE(chunk.data[1].GetValue(0).GetValue<int16_t>() == -2);
+  REQUIRE(chunk.data[2].GetValue(0).GetValue<int32_t>() == -3);
+  REQUIRE(chunk.data[3].GetValue(0).GetValue<int64_t>() == -4);
+  REQUIRE(chunk.data[4].GetValue(0).GetValue<uint8_t>() == 5);
+  REQUIRE(chunk.data[5].GetValue(0).GetValue<uint16_t>() == 6);
+  REQUIRE(chunk.data[6].GetValue(0).GetValue<uint32_t>() == 7);
+  REQUIRE(chunk.data[7].GetValue(0).GetValue<uint64_t>() == 8);
+}
+
+TEST_CASE("CopyBatchToDataChunk handles float and double", "[arrow_bridge]") {
+  auto schema = arrow::schema({
+      arrow::field("f", arrow::float32()),
+      arrow::field("d", arrow::float64()),
+  });
+
+  arrow::FloatBuilder fb;
+  arrow::DoubleBuilder db;
+  REQUIRE(fb.Append(3.14f).ok());
+  REQUIRE(db.Append(2.71828).ok());
+
+  auto batch = arrow::RecordBatch::Make(
+      schema, 1,
+      {fb.Finish().ValueOrDie(), db.Finish().ValueOrDie()});
+
+  duckdb::vector<duckdb::LogicalType> types = {
+      duckdb::LogicalType::FLOAT, duckdb::LogicalType::DOUBLE};
+  duckdb::DataChunk chunk;
+  chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+  auto rows = openduck::CopyBatchToDataChunk(batch, chunk);
+  REQUIRE(rows == 1);
+  REQUIRE(chunk.data[0].GetValue(0).GetValue<float>() == Approx(3.14f));
+  REQUIRE(chunk.data[1].GetValue(0).GetValue<double>() == Approx(2.71828));
+}
+
+TEST_CASE("CopyBatchToDataChunk handles boolean", "[arrow_bridge]") {
+  auto schema = arrow::schema({arrow::field("b", arrow::boolean())});
+  arrow::BooleanBuilder bb;
+  REQUIRE(bb.Append(true).ok());
+  REQUIRE(bb.Append(false).ok());
+  REQUIRE(bb.AppendNull().ok());
+
+  auto batch = arrow::RecordBatch::Make(
+      schema, 3, {bb.Finish().ValueOrDie()});
+
+  duckdb::vector<duckdb::LogicalType> types = {duckdb::LogicalType::BOOLEAN};
+  duckdb::DataChunk chunk;
+  chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+  auto rows = openduck::CopyBatchToDataChunk(batch, chunk);
+  REQUIRE(rows == 3);
+  REQUIRE(chunk.data[0].GetValue(0).GetValue<bool>() == true);
+  REQUIRE(chunk.data[0].GetValue(1).GetValue<bool>() == false);
+  REQUIRE(chunk.data[0].GetValue(2).IsNull());
+}
+
+TEST_CASE("CopyBatchToDataChunk handles large_string", "[arrow_bridge]") {
+  auto schema = arrow::schema({arrow::field("s", arrow::large_utf8())});
+  arrow::LargeStringBuilder sb;
+  REQUIRE(sb.Append("hello world").ok());
+  REQUIRE(sb.AppendNull().ok());
+
+  auto batch = arrow::RecordBatch::Make(
+      schema, 2, {sb.Finish().ValueOrDie()});
+
+  duckdb::vector<duckdb::LogicalType> types = {duckdb::LogicalType::VARCHAR};
+  duckdb::DataChunk chunk;
+  chunk.Initialize(duckdb::Allocator::DefaultAllocator(), types);
+
+  auto rows = openduck::CopyBatchToDataChunk(batch, chunk);
+  REQUIRE(rows == 2);
+  REQUIRE(chunk.data[0].GetValue(0).GetValue<duckdb::string>() == "hello world");
+  REQUIRE(chunk.data[0].GetValue(1).IsNull());
+}
