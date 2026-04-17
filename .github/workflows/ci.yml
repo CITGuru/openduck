@@ -11,7 +11,27 @@ env:
   SQLX_OFFLINE: false
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      cpp-extension: ${{ steps.filter.outputs.cpp-extension }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'proto/openduck/v1/**'
+            cpp-extension:
+              - 'extensions/openduck/**'
+              - 'proto/openduck/v1/**'
+
   rust:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -67,6 +87,8 @@ jobs:
         run: cargo test -p diff-bridge -- --ignored
 
   cpp-extension:
+    needs: changes
+    if: ${{ needs.changes.outputs.cpp-extension == 'true' }}
     runs-on: ubuntu-latest
     env:
       GEN: ninja

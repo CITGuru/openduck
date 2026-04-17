@@ -1,0 +1,7 @@
+[submodule "extensions/openduck/duckdb"]
+	path = extensions/openduck/duckdb
+	url = https://github.com/duckdb/duckdb.git
+[submodule "extensions/openduck/extension-ci-tools"]
+	path = extensions/openduck/extension-ci-tools
+	url = https://github.com/duckdb/extension-ci-tools.git
+	branch = v1.5.2
