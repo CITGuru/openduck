@@ -46,10 +46,13 @@ optional_ptr<CatalogEntry> OpenDuckSchemaEntry::LookupEntry(CatalogTransaction t
 		auto stream = client.ExecuteSQL(sql, config.database, config.token);
 		auto first_ipc = stream->Next();
 		if (!first_ipc) {
+			fprintf(stderr, "[openduck] LookupEntry('%s'): no IPC data returned\n", table_name.c_str());
 			return nullptr;
 		}
 
 		auto schema_info = ExtractSchema(*first_ipc);
+		fprintf(stderr, "[openduck] LookupEntry('%s'): got %zu columns\n",
+		        table_name.c_str(), schema_info.names.size());
 
 		auto info = make_uniq<CreateTableInfo>();
 		info->schema = name;
@@ -62,9 +65,16 @@ optional_ptr<CatalogEntry> OpenDuckSchemaEntry::LookupEntry(CatalogTransaction t
 		auto result = table_entry.get();
 		cached_tables_[table_name] = std::move(table_entry);
 		return result;
-	} catch (const GatewayUnavailableError &) {
+	} catch (const GatewayUnavailableError &e) {
+		fprintf(stderr, "[openduck] LookupEntry('%s'): gateway unavailable: %s\n",
+		        table_name.c_str(), e.what());
+		return nullptr;
+	} catch (const std::exception &e) {
+		fprintf(stderr, "[openduck] LookupEntry('%s'): error: %s\n",
+		        table_name.c_str(), e.what());
 		return nullptr;
 	} catch (...) {
+		fprintf(stderr, "[openduck] LookupEntry('%s'): unknown error\n", table_name.c_str());
 		return nullptr;
 	}
 }

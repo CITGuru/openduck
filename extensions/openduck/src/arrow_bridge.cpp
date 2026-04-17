@@ -190,50 +190,49 @@ static void CopyAsString(const std::shared_ptr<arrow::Array> &array,
 static void CopyColumn(const std::shared_ptr<arrow::Array> &array,
                         duckdb::Vector &vec, const duckdb::LogicalType &type,
                         duckdb::idx_t count) {
-  switch (type.id()) {
-  case duckdb::LogicalTypeId::BOOLEAN:
+  // Dispatch on the actual Arrow type to avoid UB from wrong static_pointer_cast.
+  switch (array->type_id()) {
+  case arrow::Type::BOOL:
     CopyBoolColumn(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::TINYINT:
+  case arrow::Type::INT8:
     CopyFixedWidth<arrow::Int8Array, int8_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::SMALLINT:
+  case arrow::Type::INT16:
     CopyFixedWidth<arrow::Int16Array, int16_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::INTEGER:
+  case arrow::Type::INT32:
     CopyFixedWidth<arrow::Int32Array, int32_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::BIGINT:
+  case arrow::Type::INT64:
     CopyFixedWidth<arrow::Int64Array, int64_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::UTINYINT:
+  case arrow::Type::UINT8:
     CopyFixedWidth<arrow::UInt8Array, uint8_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::USMALLINT:
+  case arrow::Type::UINT16:
     CopyFixedWidth<arrow::UInt16Array, uint16_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::UINTEGER:
+  case arrow::Type::UINT32:
     CopyFixedWidth<arrow::UInt32Array, uint32_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::UBIGINT:
+  case arrow::Type::UINT64:
     CopyFixedWidth<arrow::UInt64Array, uint64_t>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::FLOAT:
+  case arrow::Type::HALF_FLOAT:
+  case arrow::Type::FLOAT:
     CopyFixedWidth<arrow::FloatArray, float>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::DOUBLE:
+  case arrow::Type::DOUBLE:
     CopyFixedWidth<arrow::DoubleArray, double>(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::BLOB:
-    CopyBlobColumn(array, vec, count);
+  case arrow::Type::STRING:
+  case arrow::Type::LARGE_STRING:
+    CopyStringColumn(array, vec, count);
     break;
-  case duckdb::LogicalTypeId::VARCHAR:
-    if (array->type_id() == arrow::Type::STRING ||
-        array->type_id() == arrow::Type::LARGE_STRING) {
-      CopyStringColumn(array, vec, count);
-    } else {
-      CopyAsString(array, vec, count);
-    }
+  case arrow::Type::BINARY:
+  case arrow::Type::LARGE_BINARY:
+    CopyBlobColumn(array, vec, count);
     break;
   default:
     CopyAsString(array, vec, count);
@@ -274,6 +273,33 @@ duckdb::idx_t CopyBatchToDataChunk(
                               col < static_cast<duckdb::idx_t>(batch->num_columns());
        col++) {
     CopyColumn(batch->column(static_cast<int>(col)), chunk.data[col],
+               chunk.data[col].GetType(), count);
+  }
+  return count;
+}
+
+// ── CopyBatchToDataChunkProjected ────────────────────────────────────────────
+
+duckdb::idx_t CopyBatchToDataChunkProjected(
+    const std::shared_ptr<arrow::RecordBatch> &batch,
+    duckdb::DataChunk &chunk,
+    const std::vector<int> &chunk_to_batch) {
+  if (!batch || batch->num_rows() == 0) {
+    return 0;
+  }
+
+  auto count = static_cast<duckdb::idx_t>(batch->num_rows());
+  chunk.SetCardinality(count);
+  for (duckdb::idx_t col = 0; col < chunk.ColumnCount(); col++) {
+    int batch_col = (col < chunk_to_batch.size()) ? chunk_to_batch[col] : -1;
+    if (batch_col < 0) {
+      auto data = duckdb::FlatVector::GetData<int64_t>(chunk.data[col]);
+      for (duckdb::idx_t r = 0; r < count; r++) {
+        data[r] = static_cast<int64_t>(r);
+      }
+      continue;
+    }
+    CopyColumn(batch->column(batch_col), chunk.data[col],
                chunk.data[col].GetType(), count);
   }
   return count;

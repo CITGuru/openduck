@@ -190,23 +190,22 @@ fn run_sql_arrow_batches(
     let conn = open_connection(config)?;
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let arrow = stmt.query_arrow([]).map_err(|e| e.to_string())?;
+    let schema_ref = arrow.get_schema();
     let handle = tokio::runtime::Handle::current();
 
     let mut pending: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    let mut schema_ref: Option<arrow::datatypes::SchemaRef> = None;
+    let mut sent_any = false;
 
     for batch in arrow {
         if cancel.load(Ordering::Relaxed) {
             return Err(format!("execution cancelled: {execution_id}"));
         }
-        if schema_ref.is_none() {
-            schema_ref = Some(batch.schema());
-        }
         pending.push(batch);
 
         if pending.len() >= BATCHES_PER_IPC_MESSAGE {
-            let buf = encode_ipc_batch(schema_ref.as_ref().unwrap(), &pending)?;
+            let buf = encode_ipc_batch(&schema_ref, &pending)?;
             pending.clear();
+            sent_any = true;
             let chunk = ExecuteFragmentChunk {
                 payload: Some(Payload::ArrowBatch(ArrowIpcBatch {
                     ipc_stream_payload: buf,
@@ -219,8 +218,8 @@ fn run_sql_arrow_batches(
     }
 
     if !pending.is_empty() {
-        let schema = schema_ref.as_ref().unwrap();
-        let buf = encode_ipc_batch(schema, &pending)?;
+        let buf = encode_ipc_batch(&schema_ref, &pending)?;
+        sent_any = true;
         let chunk = ExecuteFragmentChunk {
             payload: Some(Payload::ArrowBatch(ArrowIpcBatch {
                 ipc_stream_payload: buf,
@@ -229,6 +228,16 @@ fn run_sql_arrow_batches(
         if handle.block_on(tx.send(Ok(chunk))).is_err() {
             return Ok(());
         }
+    }
+
+    if !sent_any {
+        let buf = encode_ipc_batch(&schema_ref, &[])?;
+        let chunk = ExecuteFragmentChunk {
+            payload: Some(Payload::ArrowBatch(ArrowIpcBatch {
+                ipc_stream_payload: buf,
+            })),
+        };
+        let _ = handle.block_on(tx.send(Ok(chunk)));
     }
 
     Ok(())
@@ -267,6 +276,17 @@ impl ExecutionService for WorkerService {
             Status::invalid_argument("plan must be UTF-8 SQL for this worker build")
         })?;
 
+        tracing::info!(
+            execution_id = %execution_id,
+            database = %inner.database,
+            "worker received execute_fragment"
+        );
+        tracing::debug!(
+            execution_id = %execution_id,
+            sql = %sql,
+            "worker query detail"
+        );
+
         let (tx, rx) = mpsc::channel::<Result<ExecuteFragmentChunk, Status>>(16);
         let cancel = Arc::new(AtomicBool::new(false));
         {
@@ -295,8 +315,11 @@ impl ExecutionService for WorkerService {
             .await;
 
             match res {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {
+                    tracing::info!(execution_id = %execution_id, "worker execution completed");
+                }
                 Ok(Err(e)) => {
+                    tracing::error!(execution_id = %execution_id, error = %e, "worker execution failed");
                     let _ = tx
                         .send(Ok(ExecuteFragmentChunk {
                             payload: Some(Payload::Error(e)),
@@ -304,6 +327,7 @@ impl ExecutionService for WorkerService {
                         .await;
                 }
                 Err(e) => {
+                    tracing::error!(execution_id = %execution_id, error = %e, "worker task join error");
                     let _ = tx
                         .send(Ok(ExecuteFragmentChunk {
                             payload: Some(Payload::Error(format!("worker join error: {e}"))),
@@ -333,6 +357,7 @@ impl ExecutionService for WorkerService {
         let cancel = request.into_inner();
         validate_token(&cancel.access_token)?;
         let id = cancel.execution_id;
+        tracing::info!(execution_id = %id, "worker received cancel_execution");
         if id.is_empty() {
             return Ok(Response::new(CancelReply {
                 acknowledged: false,

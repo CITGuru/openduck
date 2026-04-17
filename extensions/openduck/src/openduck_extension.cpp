@@ -75,8 +75,10 @@ AttachConfig ResolveAttachConfig(const std::string &uri) {
 		cfg.scheme = "od";
 		cfg.database = head.substr(std::string("od:").size());
 	} else {
-		cfg.error = "unsupported attach URI; expected openduck: or od:";
-		return cfg;
+		// DuckDB strips the scheme before calling the storage extension attach
+		// handler, so the head is just the database name.
+		cfg.scheme = "openduck";
+		cfg.database = head;
 	}
 
 	if (cfg.database.empty()) {

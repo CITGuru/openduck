@@ -109,7 +109,7 @@ extensions/openduck/build/release/extension/openduck/openduck.duckdb_extension
 
 ```bash
 export OPENDUCK_TOKEN=your-token
-cargo run -p openduck -- serve -d mydb -t your-token
+cargo run -p openduck -- -d mydb --token your-token
 ```
 
 ### 4. Connect
@@ -186,7 +186,7 @@ crates/
   exec-gateway/     Gateway — auth, worker registry, routing, hybrid plan splitting
   exec-worker/      Worker — embedded DuckDB, Arrow IPC streaming
   exec-proto/       Protobuf/tonic codegen + shared auth module
-  openduck-cli/     Unified CLI (openduck serve|gateway|worker|query|cancel|snapshot)
+  openduck-cli/     Unified CLI (openduck [default]|gateway|worker|query|cancel|status|snapshot|gc)
   openduck-metrics/ OpenTelemetry metrics (optional OTLP exporter)
   diff-core/        Core types and StorageBackend trait
   diff-metadata/    Postgres metadata repo, GC, PgStorageBackend

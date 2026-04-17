@@ -6,7 +6,7 @@ Prerequisites:
     export OPENDUCK_TOKEN=your-token
 
     # Start the OpenDuck service:
-    cargo run -p openduck -- serve -d mydb -t your-token
+    cargo run -p openduck -- -d mydb --token your-token
 
     # Then run:
     python examples/client_python.py

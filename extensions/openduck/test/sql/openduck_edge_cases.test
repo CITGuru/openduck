@@ -1,0 +1,101 @@
+# name: test/sql/openduck_edge_cases.test
+# description: edge-case tests for function registration, error handling, and type casting
+# group: [sql]
+
+require openduck
+
+# ── Function registration ────────────────────────────────────────────────────
+
+# All three public functions exist
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name IN ('openduck_remote', 'openduck_query');
+----
+2
+
+# ── openduck_remote argument validation ──────────────────────────────────────
+
+# Too few arguments
+statement error
+SELECT * FROM openduck_remote('http://localhost:9999');
+----
+
+# Too many arguments (4 instead of 3)
+statement error
+SELECT * FROM openduck_remote('a', 'b', 'c', 'd');
+----
+
+# ── openduck_query missing alias ─────────────────────────────────────────────
+
+statement error
+SELECT * FROM openduck_query('no_such_alias', 'SELECT 1');
+----
+No ATTACH config for alias
+
+# Multiple different missing aliases
+statement error
+SELECT * FROM openduck_query('staging_db', 'SELECT * FROM users');
+----
+No ATTACH config for alias
+
+statement error
+SELECT * FROM openduck_query('production', 'SELECT count(*)');
+----
+No ATTACH config for alias
+
+# ── Secrets: lifecycle and coexistence ────────────────────────────────────────
+
+# Create multiple secrets of different types
+statement ok
+CREATE SECRET test_a (TYPE openduck_storage, postgres_url 'postgres://a/db', data_dir '/tmp/a');
+
+statement ok
+CREATE SECRET test_b (TYPE openduck_storage, data_dir '/tmp/b');
+
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE type = 'openduck_storage';
+----
+2
+
+# postgres_url is redacted
+query I
+SELECT secret_string LIKE '%postgres_url=redacted%'
+FROM duckdb_secrets()
+WHERE name = 'test_a' AND type = 'openduck_storage';
+----
+true
+
+# data_dir-only secret has no postgres_url in string
+query I
+SELECT secret_string NOT LIKE '%postgres_url%'
+FROM duckdb_secrets()
+WHERE name = 'test_b';
+----
+true
+
+# Clean up
+statement ok
+DROP SECRET test_a;
+
+statement ok
+DROP SECRET test_b;
+
+# ── Secret re-creation after drop ─────────────────────────────────────────────
+
+statement ok
+CREATE SECRET ephemeral (TYPE openduck_storage, data_dir '/tmp/e');
+
+statement ok
+DROP SECRET ephemeral;
+
+# Re-create with same name
+statement ok
+CREATE SECRET ephemeral (TYPE openduck_storage, data_dir '/tmp/e2');
+
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'ephemeral';
+----
+1
+
+statement ok
+DROP SECRET ephemeral;
