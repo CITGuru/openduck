@@ -94,8 +94,7 @@ fn total_rows(result: &RunResult) -> usize {
         .batches
         .iter()
         .flat_map(|b| {
-            let reader =
-                StreamReader::try_new(std::io::Cursor::new(b), None).expect("open IPC");
+            let reader = StreamReader::try_new(std::io::Cursor::new(b), None).expect("open IPC");
             reader
                 .into_iter()
                 .filter_map(|r| r.ok())
@@ -204,12 +203,7 @@ async fn ddl_error_propagates() {
         .await
         .unwrap();
 
-    let r = run_sql(
-        &mut c,
-        "SELECT * FROM nonexistent_table_xyz",
-        "edge-error",
-    )
-    .await;
+    let r = run_sql(&mut c, "SELECT * FROM nonexistent_table_xyz", "edge-error").await;
     assert!(r.error.is_some(), "expected error for missing table");
 }
 
@@ -247,7 +241,12 @@ async fn diverse_types_roundtrip() {
     .await;
     assert_ok(&r, "types INSERT");
 
-    let r = run_sql(&mut c, "SELECT * FROM types_test ORDER BY id", "types-select").await;
+    let r = run_sql(
+        &mut c,
+        "SELECT * FROM types_test ORDER BY id",
+        "types-select",
+    )
+    .await;
     assert_ok(&r, "types SELECT");
     assert_eq!(total_rows(&r), 3);
 }
@@ -260,7 +259,12 @@ async fn null_aggregation() {
         .await
         .unwrap();
 
-    run_sql(&mut c, "CREATE TABLE nulls (id INTEGER, val VARCHAR)", "nulls-ddl").await;
+    run_sql(
+        &mut c,
+        "CREATE TABLE nulls (id INTEGER, val VARCHAR)",
+        "nulls-ddl",
+    )
+    .await;
     run_sql(
         &mut c,
         "INSERT INTO nulls VALUES (1, 'a'), (2, NULL), (3, 'c'), (4, NULL)",
@@ -286,7 +290,12 @@ async fn self_join() {
         .await
         .unwrap();
 
-    run_sql(&mut c, "CREATE TABLE items (id INTEGER, label VARCHAR)", "sj-ddl").await;
+    run_sql(
+        &mut c,
+        "CREATE TABLE items (id INTEGER, label VARCHAR)",
+        "sj-ddl",
+    )
+    .await;
     run_sql(
         &mut c,
         "INSERT INTO items VALUES (1, 'a'), (2, 'b'), (3, 'c')",
@@ -410,15 +419,30 @@ async fn set_operations() {
     run_sql(&mut c, "INSERT INTO s1 VALUES (1),(2),(3)", "set-ins1").await;
     run_sql(&mut c, "INSERT INTO s2 VALUES (2),(3),(4)", "set-ins2").await;
 
-    let r = run_sql(&mut c, "SELECT v FROM s1 UNION SELECT v FROM s2", "set-union").await;
+    let r = run_sql(
+        &mut c,
+        "SELECT v FROM s1 UNION SELECT v FROM s2",
+        "set-union",
+    )
+    .await;
     assert_ok(&r, "UNION");
     assert_eq!(total_rows(&r), 4);
 
-    let r = run_sql(&mut c, "SELECT v FROM s1 INTERSECT SELECT v FROM s2", "set-intersect").await;
+    let r = run_sql(
+        &mut c,
+        "SELECT v FROM s1 INTERSECT SELECT v FROM s2",
+        "set-intersect",
+    )
+    .await;
     assert_ok(&r, "INTERSECT");
     assert_eq!(total_rows(&r), 2);
 
-    let r = run_sql(&mut c, "SELECT v FROM s1 EXCEPT SELECT v FROM s2", "set-except").await;
+    let r = run_sql(
+        &mut c,
+        "SELECT v FROM s1 EXCEPT SELECT v FROM s2",
+        "set-except",
+    )
+    .await;
     assert_ok(&r, "EXCEPT");
     assert_eq!(total_rows(&r), 1);
 }
@@ -431,7 +455,12 @@ async fn aggregation_having_order_limit() {
         .await
         .unwrap();
 
-    run_sql(&mut c, "CREATE TABLE logs (category VARCHAR, val INTEGER)", "having-ddl").await;
+    run_sql(
+        &mut c,
+        "CREATE TABLE logs (category VARCHAR, val INTEGER)",
+        "having-ddl",
+    )
+    .await;
     run_sql(
         &mut c,
         "INSERT INTO logs VALUES ('a',1),('a',2),('b',3),('c',4),('c',5),('c',6)",
@@ -459,9 +488,24 @@ async fn insert_select_across_tables() {
         .await
         .unwrap();
 
-    run_sql(&mut c, "CREATE TABLE src (id INTEGER, name VARCHAR)", "inssel-ddl").await;
-    run_sql(&mut c, "INSERT INTO src VALUES (1,'alice'),(2,'bob')", "inssel-insert").await;
-    run_sql(&mut c, "CREATE TABLE dst AS SELECT * FROM src", "inssel-ctas").await;
+    run_sql(
+        &mut c,
+        "CREATE TABLE src (id INTEGER, name VARCHAR)",
+        "inssel-ddl",
+    )
+    .await;
+    run_sql(
+        &mut c,
+        "INSERT INTO src VALUES (1,'alice'),(2,'bob')",
+        "inssel-insert",
+    )
+    .await;
+    run_sql(
+        &mut c,
+        "CREATE TABLE dst AS SELECT * FROM src",
+        "inssel-ctas",
+    )
+    .await;
 
     let r = run_sql(&mut c, "SELECT * FROM dst", "inssel-verify").await;
     assert_ok(&r, "INSERT...SELECT");
