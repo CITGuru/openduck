@@ -9,6 +9,20 @@ on:
 env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: false
+  # Use the GH Actions cache for vcpkg's already-built dependency
+  # binaries (openssl, abseil, grpc, protobuf, arrow, …). Two wins:
+  #   1. Subsequent runs skip the from-source rebuild entirely, so a
+  #      transient upstream-archive 502 (e.g. github.com/openssl/openssl
+  #      tarball download) doesn't fail the build.
+  #   2. Cold builds drop from ~25 min to ~3 min once the cache is warm.
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+# Required by `actions/cache` (which `x-gha` uses under the hood) and by
+# `actions/cache@v4`'s GH-token-based eviction calls. Without these,
+# `x-gha` falls back to read-only mode and the cache never gets seeded.
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   changes:
@@ -166,6 +180,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build ccache
 
+      - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -223,6 +244,13 @@ jobs:
         run: |
           brew install ninja ccache pkg-config
 
+      - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -276,6 +304,13 @@ jobs:
 
       - name: Install ninja
         run: choco install ninja --no-progress
+
+      - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11

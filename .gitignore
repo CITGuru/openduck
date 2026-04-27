@@ -11,3 +11,4 @@
 /docs/
 /target/
 mydb
+.cache/*

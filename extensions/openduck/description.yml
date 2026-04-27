@@ -181,4 +181,5 @@ docs:
     | Secret type   | `openduck_storage`| `postgres_url`, `data_dir`         |
     | Optimizer ext | `openduck`        | LIMIT/OFFSET pushdown              |
 
-    Source repository: https://github.com/CITGuru/openduck
+    Source repository: https://github.com/CITGuru/openduck.
+
