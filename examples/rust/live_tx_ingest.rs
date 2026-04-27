@@ -109,7 +109,10 @@ async fn execute_collect(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         if let Some(te) = chunk.typed_error.as_ref() {
-            typed = Some((Kind::try_from(te.kind).unwrap_or(Kind::Unknown), te.message.clone()));
+            typed = Some((
+                Kind::try_from(te.kind).unwrap_or(Kind::Unknown),
+                te.message.clone(),
+            ));
         }
         if let Some(payload) = chunk.payload {
             match payload {
@@ -214,12 +217,11 @@ async fn scenario_pinned_temp_survives_then_dies(client: &mut Client, token: &st
 
     // Off-transaction (auto-commit), the TEMP TABLE created on the pinned
     // connection should not exist. Expect a Catalog error.
-    let after = match execute_collect(client, "SELECT COUNT(*) FROM live_tx_temp", token, None)
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return fail(name, format!("post-commit SELECT errored: {e}")),
-    };
+    let after =
+        match execute_collect(client, "SELECT COUNT(*) FROM live_tx_temp", token, None).await {
+            Ok(r) => r,
+            Err(e) => return fail(name, format!("post-commit SELECT errored: {e}")),
+        };
     match after.1 {
         Some((Kind::Catalog, msg)) => pass(
             name,
@@ -254,12 +256,11 @@ async fn scenario_rollback_undoes_writes(client: &mut Client, token: &str) -> Ou
         return fail(name, format!("setup CREATE failed: {e}"));
     }
 
-    let baseline = match execute_collect(client, "SELECT COUNT(*) FROM live_tx_perm", token, None)
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return fail(name, format!("baseline SELECT failed: {e}")),
-    };
+    let baseline =
+        match execute_collect(client, "SELECT COUNT(*) FROM live_tx_perm", token, None).await {
+            Ok(r) => r,
+            Err(e) => return fail(name, format!("baseline SELECT failed: {e}")),
+        };
     if baseline.1.is_some() {
         return fail(name, format!("baseline typed_error: {:?}", baseline.1));
     }
@@ -370,7 +371,10 @@ async fn scenario_cross_identity_commit_rejected(
                 }
                 Some(e) => fail(
                     name,
-                    format!("expected PERMISSION typed error, got kind={}: {}", e.kind, e.message),
+                    format!(
+                        "expected PERMISSION typed error, got kind={}: {}",
+                        e.kind, e.message
+                    ),
                 ),
                 None => fail(
                     name,
@@ -384,9 +388,15 @@ async fn scenario_cross_identity_commit_rejected(
                 tonic::Code::PermissionDenied | tonic::Code::Unauthenticated
             ) =>
         {
-            pass(name, format!("rejected at transport: {} {}", s.code(), s.message()))
+            pass(
+                name,
+                format!("rejected at transport: {} {}", s.code(), s.message()),
+            )
         }
-        Err(s) => fail(name, format!("unexpected gRPC error: {} {}", s.code(), s.message())),
+        Err(s) => fail(
+            name,
+            format!("unexpected gRPC error: {} {}", s.code(), s.message()),
+        ),
     };
 
     let _ = client
@@ -418,7 +428,10 @@ async fn scenario_unknown_tx_id_typed_error(client: &mut Client, token: &str) ->
             name,
             format!("expected typed Catalog/Internal, got batches={b} typed={te:?}"),
         ),
-        Err(e) => fail(name, format!("transport error (expected stream w/ typed): {e}")),
+        Err(e) => fail(
+            name,
+            format!("transport error (expected stream w/ typed): {e}"),
+        ),
     }
 }
 
@@ -436,10 +449,7 @@ async fn scenario_ingest_streaming(client: &mut Client, token: &str) -> Outcome 
     };
     let tx = begin.transaction_id.clone();
 
-    let staging = format!(
-        "__openduck_ingest_live_{}",
-        uuid::Uuid::new_v4().simple()
-    );
+    let staging = format!("__openduck_ingest_live_{}", uuid::Uuid::new_v4().simple());
     let (_schema, ipc, expected_rows) = ipc_batch();
 
     let (sink, rx) = tokio::sync::mpsc::channel::<IngestChunk>(4);
@@ -448,8 +458,14 @@ async fn scenario_ingest_streaming(client: &mut Client, token: &str) -> Outcome 
             database: String::new(),
             staging_table: staging.clone(),
             columns: vec![
-                IngestColumn { name: "k".into(), sql_type: "INTEGER".into() },
-                IngestColumn { name: "v".into(), sql_type: "VARCHAR".into() },
+                IngestColumn {
+                    name: "k".into(),
+                    sql_type: "INTEGER".into(),
+                },
+                IngestColumn {
+                    name: "v".into(),
+                    sql_type: "VARCHAR".into(),
+                },
             ],
             transaction_id: Some(tx.clone()),
             access_token: token.into(),
@@ -467,14 +483,19 @@ async fn scenario_ingest_streaming(client: &mut Client, token: &str) -> Outcome 
     drop(sink);
 
     let reply = match client
-        .ingest_data(Request::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        .ingest_data(Request::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
         .await
     {
         Ok(r) => r.into_inner(),
         Err(e) => return fail(name, format!("IngestData rpc failed: {e}")),
     };
     if reply.typed_error.is_some() {
-        return fail(name, format!("IngestData typed_error: {:?}", reply.typed_error));
+        return fail(
+            name,
+            format!("IngestData typed_error: {:?}", reply.typed_error),
+        );
     }
     if reply.rows_ingested as usize != expected_rows {
         return fail(
@@ -500,10 +521,7 @@ async fn scenario_ingest_streaming(client: &mut Client, token: &str) -> Outcome 
         Err(e) => return fail(name, format!("post-ingest SELECT failed: {e}")),
     };
     if select.1.is_some() {
-        return fail(
-            name,
-            format!("staging SELECT typed_error: {:?}", select.1),
-        );
+        return fail(name, format!("staging SELECT typed_error: {:?}", select.1));
     }
     if select.0 == 0 {
         return fail(name, "post-ingest SELECT returned no batches".into());
@@ -534,8 +552,16 @@ async fn scenario_ingest_streaming(client: &mut Client, token: &str) -> Outcome 
 }
 
 fn pass(name: &'static str, detail: String) -> Outcome {
-    Outcome { name, pass: true, detail }
+    Outcome {
+        name,
+        pass: true,
+        detail,
+    }
 }
 fn fail(name: &'static str, detail: String) -> Outcome {
-    Outcome { name, pass: false, detail }
+    Outcome {
+        name,
+        pass: false,
+        detail,
+    }
 }
