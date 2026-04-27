@@ -17,6 +17,25 @@ env:
   #   2. Cold builds drop from ~25 min to ~3 min once the cache is warm.
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
+  # ── CI build-size diet ───────────────────────────────────────────────
+  # GH-hosted Linux runners only have ~14 GB of free root disk. The
+  # workspace pulls in `duckdb-rs` (compiles DuckDB from source) plus
+  # arrow / sqlx / tonic / tokio, and cargo's full DWARF debug info
+  # alone can push `target/` over 8 GB. These env vars override the
+  # dev/test profile JUST FOR CI without modifying Cargo.toml (which
+  # would degrade local debugging UX). Effects:
+  #   - `debug = "line-tables-only"`: line numbers in panics, no full
+  #     DWARF — shrinks `target/` by ~50 %.
+  #   - `incremental = false`: don't store per-crate incremental
+  #     metadata (CI builds clean each run anyway, sharded via
+  #     Swatinem/rust-cache).
+  #   - `CARGO_NET_RETRY = 5`: ride out transient registry blips
+  #     during `cargo fetch` instead of failing the whole job.
+  CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+  CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "5"
+
 # Required by `actions/cache` (which `x-gha` uses under the hood) and by
 # `actions/cache@v4`'s GH-token-based eviction calls. Without these,
 # `x-gha` falls back to read-only mode and the cache never gets seeded.
@@ -67,6 +86,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Linux GH-hosted runners ship with ~30 GB of preinstalled tools
+      # (Android SDK, .NET, GHC, CodeQL, large container images, etc.)
+      # we don't use. Building the workspace through `duckdb-rs`
+      # (which compiles DuckDB's full C++ tree from inside cargo)
+      # plus all our other deps overflows the ~14 GB of free root
+      # disk and trips `rustc-LLVM ERROR: No space left on device`.
+      # Reclaim the headroom before doing anything else.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false   # keep .NET/Java toolcache so other steps don't break
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false  # skip — these prune calls are the slow ones
+          docker-images: true
+          swap-storage: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -174,6 +211,21 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
+      # vcpkg-built dependencies + DuckDB submodule + extension build
+      # tree easily exceed the ~14 GB of free root disk on Linux
+      # GH-hosted runners. Strip out the preinstalled tools we don't
+      # need before doing anything that writes to disk.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: true
 
       - name: Install dependencies
         run: |
