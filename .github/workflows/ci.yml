@@ -228,9 +228,13 @@ jobs:
           swap-storage: true
 
       - name: Install dependencies
+        # Ubuntu's `bison` package is 3.x — well above thrift's >= 2.5
+        # requirement — but it's not in the default runner image, so
+        # we install it explicitly. Same with `flex` for any vcpkg
+        # port that needs a lex generator.
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build ccache
+          sudo apt-get install -y ninja-build ccache bison flex
 
       - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
         uses: actions/github-script@v7
@@ -293,8 +297,13 @@ jobs:
           fetch-depth: 0
 
       - name: Install dependencies
+        # `bison` is required because Apple ships an ancient bison 2.3
+        # (license reasons) and several vcpkg ports — notably `thrift`
+        # — require >= 2.5. Homebrew's `bison` is keg-only, so the
+        # later step prepends `/opt/homebrew/opt/bison/bin` to PATH
+        # to make sure vcpkg picks it up over the system binary.
         run: |
-          brew install ninja ccache pkg-config
+          brew install ninja ccache pkg-config bison
 
       - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
         uses: actions/github-script@v7
@@ -319,14 +328,19 @@ jobs:
         env:
           VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
         run: |
-          export PATH="$(brew --prefix ccache)/libexec:$PATH"
+          # ccache shim first; brew's keg-only bison overrides the
+          # ancient Apple-shipped /usr/bin/bison (vcpkg's `thrift` port
+          # requires bison >= 2.5).
+          export PATH="$(brew --prefix ccache)/libexec:$(brew --prefix bison)/bin:$PATH"
           make release
 
       - name: SQL logic tests
         working-directory: extensions/openduck
         env:
           VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-        run: make test_release
+        run: |
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          make test_release
 
   # ── C++ extension: native Windows (MSVC) build + SQL smoke tests ───────────
   # Marked allow-failure for now: the gRPC + Arrow + DuckDB combination on
