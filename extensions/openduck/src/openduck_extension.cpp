@@ -3,12 +3,14 @@
 #include "openduck_extension.hpp"
 #include "openduck_catalog.hpp"
 #include "openduck_filesystem.hpp"
+#include "openduck_optimizer.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/optimizer/optimizer_extension.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 
@@ -138,6 +140,7 @@ public:
 		if (!cfg.valid) {
 			throw InvalidInputException("OpenDuck attach error: %s", cfg.error);
 		}
+		cfg.read_only = (options.access_mode == AccessMode::READ_ONLY);
 
 		StoreAttachConfig(name, cfg);
 
@@ -277,15 +280,34 @@ static unique_ptr<BaseSecret> CreateOpenDuckStorageSecret(ClientContext &, Creat
 	return std::move(secret);
 }
 
+} // namespace duckdb
+
+namespace openduck {
+
+void RegisterStorageExtensionsForTest(duckdb::DBConfig &config) {
+	auto se1 = duckdb::make_shared_ptr<openduck::OpenDuckStorageExtension>();
+	duckdb::StorageExtension::Register(config, "openduck", std::move(se1));
+	auto se2 = duckdb::make_shared_ptr<openduck::OpenDuckStorageExtension>();
+	duckdb::StorageExtension::Register(config, "od", std::move(se2));
+
+	// Register the OpenDuck optimizer extension alongside the storage
+	// extension so the LIMIT/OFFSET pushdown pass runs for every
+	// ATTACH'ed catalog. Mirrors `duckdb-postgres`'s registration
+	// in `postgres_extension.cpp`.
+	duckdb::OptimizerExtension od_optimizer;
+	od_optimizer.optimize_function = openduck::OpenDuckOptimizer::Optimize;
+	duckdb::OptimizerExtension::Register(config, std::move(od_optimizer));
+}
+
+} // namespace openduck
+
+namespace duckdb {
+
 static void LoadInternal(ExtensionLoader &loader) {
 	auto &db = loader.GetDatabaseInstance();
 	auto &config = DBConfig::GetConfig(db);
 
-	auto se1 = make_shared_ptr<openduck::OpenDuckStorageExtension>();
-	StorageExtension::Register(config, "openduck", std::move(se1));
-
-	auto se2 = make_shared_ptr<openduck::OpenDuckStorageExtension>();
-	StorageExtension::Register(config, "od", std::move(se2));
+	openduck::RegisterStorageExtensionsForTest(config);
 
 	auto &fs = FileSystem::GetFileSystem(db);
 	fs.RegisterSubSystem(make_uniq<openduck::OpenDuckFileSystem>());

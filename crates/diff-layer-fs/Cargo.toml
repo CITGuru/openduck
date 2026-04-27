@@ -1,9 +1,9 @@
 [package]
 name = "diff-layer-fs"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
 
 [dependencies]
-thiserror.workspace = true
-uuid.workspace = true
+thiserror = { workspace = true }
+uuid = { workspace = true }

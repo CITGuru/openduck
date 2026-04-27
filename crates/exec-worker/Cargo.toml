@@ -1,8 +1,8 @@
 [package]
 name = "exec-worker"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
 
 [lib]
 path = "src/lib.rs"
@@ -17,12 +17,12 @@ harness = false
 
 [dependencies]
 exec-proto = { path = "../exec-proto" }
-tokio.workspace = true
-tokio-stream.workspace = true
-tonic.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-duckdb = { version = "1.10501", features = ["bundled"] }
+tokio = { workspace = true } 
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+duckdb = { version = "1.10502", features = ["bundled", "appender-arrow"] }
 arrow = { version = "58", default-features = false, features = ["ipc"] }
-uuid.workspace = true
+uuid = { workspace = true }
 

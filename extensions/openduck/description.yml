@@ -1,0 +1,184 @@
+# Community Extensions descriptor for `openduck`.
+#
+# This file is the source of truth for the YAML that gets submitted to
+# https://github.com/duckdb/community-extensions under
+# `extensions/openduck/description.yml`. Keep it in sync with the actual
+# extension build (CMakeLists.txt) and the auto-detected SQL surface
+# (registered functions / secrets / table functions).
+#
+# Submission flow:
+#   1. Bump `extension.version` and update `repo.ref` to the tagged commit.
+#   2. Open a PR to duckdb/community-extensions with this file copied to
+#      `extensions/openduck/description.yml`.
+#   3. The community-extensions CI builds for every platform listed in
+#      https://duckdb.org/community_extensions/development#supported-platforms
+#      and skips anything in `excluded_platforms`.
+
+extension:
+  name: openduck
+  description: >-
+    Dual-execution DuckDB catalog: query a remote DuckDB-compatible
+    engine over gRPC with native Arrow IPC streaming, transparent
+    cross-catalog joins/inserts between local and remote data, a
+    differential (snapshot + sealed-layer) storage substrate, and
+    Postgres-backed metadata for live transaction ingest.
+  version: 0.1.0
+  language: C++
+  build: cmake
+  license: MIT
+  maintainers:
+    - CITGuru
+
+  # Pin vcpkg to the same commit DuckDB v1.5.1 expects (matches the
+  # `MainDistributionPipeline.yml` workflow). Keep these aligned when
+  # bumping `duckdb_version`.
+  vcpkg_commit: "84bab45d415d22042bd0b9081aea57f362da3f35"
+
+  # The extension itself compiles without Rust, but the optional
+  # `OPENDUCK_BRIDGE_LIB` (libdiff_bridge.a) is needed for the Postgres-
+  # backed metadata path. Declaring `rust` here ensures the community
+  # builders provision cargo so the bridge can be linked in.
+  requires_toolchains: "rust"
+
+  # Platforms intentionally skipped:
+  #   - wasm_*: Arrow C++ + gRPC do not build for emscripten.
+  #   - windows_amd64_mingw / windows_amd64_rtools: vcpkg gRPC + protobuf
+  #     do not currently build under MinGW; tonic/arrow-rs likewise need
+  #     MSVC-compatible Rust targets.
+  #   - linux_amd64_musl / linux_arm64_musl: gRPC + Arrow on musl is not
+  #     yet validated; revisit once we have a green CI run.
+  excluded_platforms: >-
+    wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;windows_amd64_rtools;linux_amd64_musl;linux_arm64_musl
+
+repo:
+  github: CITGuru/openduck
+  # Update to a release tag (e.g. v0.1.0) before submission. During
+  # iteration this can point at a commit on `main`.
+  ref: edb91dff636c4903097be3bb1e9bbb7e4985b587
+
+docs:
+  hello_world: |
+    -- Point at a running OpenDuck gateway (defaults can also be supplied
+    -- via OPENDUCK_ENDPOINT / OPENDUCK_TOKEN env vars).
+    INSTALL openduck FROM community;
+    LOAD openduck;
+
+    -- Attach a remote OpenDuck catalog. The URI is `openduck:<database>`
+    -- (or `od:<database>`); query parameters configure the gateway.
+    ATTACH 'openduck:warehouse?endpoint=http://gateway:7878&token=secret'
+      AS remote (TYPE openduck);
+
+    -- (a) Pure-remote execution: planned + run entirely on the gateway,
+    --     results streamed back as Arrow IPC.
+    SELECT count(*) FROM remote.public.events;
+
+    -- (b) Dual execution: local Parquet joined with a remote table; the
+    --     local engine handles `read_parquet`, the OpenDuck physical
+    --     operator ships the join result into the remote insert path.
+    INSERT INTO remote.public.events
+    SELECT * FROM read_parquet('s3://bucket/new_events.parquet');
+
+    -- (c) Time-travel against a sealed differential snapshot.
+    SELECT * FROM openduck_query(
+        'remote',
+        'SELECT * FROM events AS OF SNAPSHOT ''<snapshot_uuid>'''
+    );
+
+  extended_description: |
+    `openduck` makes a local DuckDB process a first-class client of a
+    remote, multi-tenant, DuckDB-compatible execution and storage
+    service. It is built around three ideas:
+
+    ### 1. Remote DuckDB execution (gRPC + Arrow IPC)
+
+    The OpenDuck gateway speaks DuckDB SQL: it parses, plans, and runs
+    queries on the server side using the DuckDB engine, then streams
+    results back to the client as Arrow IPC record batches over a
+    gRPC bidi stream.
+
+    `ATTACH 'openduck:<db>?endpoint=...&token=...' AS x (TYPE openduck)`
+    registers a `StorageExtension` so the local DuckDB instance treats
+    the remote database like any other attached catalog: schema and
+    table lookups, scans, `INSERT` / `UPDATE` / `DELETE`, `MERGE INTO`,
+    `CREATE TABLE AS`, and `COPY ... TO` all flow through the catalog
+    interface and are emitted as SQL to the gateway. Results are
+    decoded directly into DuckDB `DataChunk`s with no intermediate
+    materialization.
+
+    Authentication is per-attach: a token can be supplied in the URI,
+    in the `OPENDUCK_TOKEN` environment variable, or via the
+    `openduck_storage` secret type.
+
+    ### 2. Dual execution (local + remote, per query)
+
+    OpenDuck does not require you to choose between local and remote
+    DuckDB — a single SQL statement can mix tables from both sides:
+
+    ```sql
+    -- local Parquet joined with a remote table, written back remote
+    INSERT INTO remote.public.fact
+    SELECT l.id, r.label
+    FROM read_parquet('s3://bucket/local.parquet') l
+    JOIN remote.public.dim r USING (id);
+    ```
+
+    For each bound logical plan, the catalog walks the tree
+    (`HasNonRemoteReference`) and classifies it as:
+
+    - **Pure-remote:** every reference resolves to the attached
+      OpenDuck catalog → the plan is reissued as SQL on the gateway,
+      including aggregates, joins, window functions, and DDL/DML.
+      This is the fast path: no rows ever touch the local engine.
+    - **Pure-local:** no remote references → DuckDB executes
+      normally; the extension is invisible.
+    - **Mixed (cross-catalog):** the local engine runs the local
+      portions of the plan, the OpenDuck physical operator
+      (`PhysicalOpenDuckIngestAndMutate`) ships the resulting
+      Arrow stream into the gateway, and any remote-side mutation
+      (insert/update/delete/merge) is applied transactionally by the
+      gateway against the differential store.
+
+    An `OptimizerExtension` also runs LIMIT/OFFSET pushdown on
+    pure-remote subtrees so the gateway can cap scans at the source.
+
+    ### 3. Differential storage (snapshot + sealed-layer substrate)
+
+    The gateway stores each attached database as a stack of immutable
+    sealed layers plus a single mutable active layer (see the
+    `diff-core`, `diff-blob`, `diff-layer-fs`, and `diff-metadata`
+    crates). Every transaction commits by appending to the active
+    layer; `seal()` promotes the active layer into a new
+    `SnapshotId` and starts a fresh one. Reads can target either the
+    mutable tip or any historical snapshot, so the same table can be
+    queried as-of a past state without copying data.
+
+    This shape gives OpenDuck three useful properties out of the box:
+
+    - **Crash-consistent commits** — sealed layers + Postgres ledger
+      provide at-least-once durability for live transaction ingest;
+      partial writes never become visible.
+    - **Time travel** — a `ReadContext { snapshot_id }` plumbs through
+      the gRPC API so clients can pin a query to a specific snapshot.
+    - **Cheap branching / GC** — sealed layers are content-addressed
+      blobs; unreferenced layers are reaped by `diff-metadata`'s GC
+      task instead of by mutating live files.
+
+    A `CREATE SECRET (TYPE openduck_storage, postgres_url '...',
+    data_dir '...')` selects where the gateway materializes its
+    metadata ledger and on-disk chunk store. The same descriptor can
+    point at an in-memory backend (for tests) or the real
+    Postgres + filesystem backend (for production).
+
+    ### Registered surface
+
+    Auto-detected by the community docs builder:
+
+    | Kind          | Name              | Notes                              |
+    | ------------- | ----------------- | ---------------------------------- |
+    | Storage type  | `openduck` / `od` | `ATTACH '...' AS x (TYPE openduck)`|
+    | Table fn      | `openduck_remote` | `(endpoint, token, sql)`           |
+    | Table fn      | `openduck_query`  | `(alias, sql)`                     |
+    | Secret type   | `openduck_storage`| `postgres_url`, `data_dir`         |
+    | Optimizer ext | `openduck`        | LIMIT/OFFSET pushdown              |
+
+    Source repository: https://github.com/CITGuru/openduck

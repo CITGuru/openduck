@@ -1,8 +1,8 @@
 [package]
 name = "exec-gateway"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
 
 [lib]
 path = "src/lib.rs"
@@ -13,13 +13,13 @@ path = "src/main.rs"
 
 [dependencies]
 exec-proto = { path = "../exec-proto" }
-tokio.workspace = true
-tonic.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-bytes.workspace = true
-tokio-stream.workspace = true
-uuid.workspace = true
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+bytes = { workspace = true }
+tokio-stream = { workspace = true }
+uuid = { workspace = true }
 arrow = { version = "58", default-features = false, features = ["ipc"] }
 duckdb = { version = "1.10501", features = ["bundled", "appender-arrow"] }
 

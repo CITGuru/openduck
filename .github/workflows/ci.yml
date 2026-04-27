@@ -25,10 +25,13 @@ jobs:
             rust:
               - 'crates/**'
               - 'proto/openduck/v1/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
             cpp-extension:
               - 'extensions/openduck/**'
               - 'proto/openduck/v1/**'
 
+  # ── Rust workspace: full suite on Linux (with Postgres + FUSE deps) ─────────
   rust:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -86,6 +89,64 @@ jobs:
           DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
         run: cargo test -p diff-bridge -- --ignored
 
+  # ── Rust workspace: cross-platform smoke on macOS + Windows ─────────────────
+  # We can't spin up the `postgres:` service on non-Linux runners and the
+  # FUSE crate does not build on Windows, so we narrow the set of crates
+  # to the platform-portable ones and skip the integration tests that
+  # require DATABASE_URL. The goal is to catch regressions in our
+  # cross-platform code (proto, gateway/worker stubs, blob/layer/metrics)
+  # without having to provision Postgres outside of Linux.
+  rust-cross-platform:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            exclude_crates: '--exclude diff-fuse'
+          - os: windows-latest
+            exclude_crates: '--exclude diff-fuse'
+    runs-on: ${{ matrix.os }}
+    env:
+      # Ensure sqlx queries are validated against the offline cache rather
+      # than reaching out to a Postgres server we don't have on these
+      # runners.
+      SQLX_OFFLINE: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo build (portable crates)
+        run: cargo build --workspace --all-targets ${{ matrix.exclude_crates }}
+
+      - name: cargo clippy (portable crates)
+        run: cargo clippy --workspace --all-targets ${{ matrix.exclude_crates }} -- -D warnings
+
+      # Only run tests for crates that don't need a live Postgres or FUSE.
+      - name: cargo test (no-db crates)
+        run: >-
+          cargo test
+          -p exec-proto
+          -p diff-core
+          -p diff-blob
+          -p diff-layer-fs
+          -p openduck-metrics
+
+  # ── C++ extension: full build + tests on Linux (canonical platform) ────────
   cpp-extension:
     needs: changes
     if: ${{ needs.changes.outputs.cpp-extension == 'true' }}
@@ -139,6 +200,102 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug
           cmake --build build
           ./build/test_arrow_bridge
+
+  # ── C++ extension: native macOS build + SQL smoke tests ────────────────────
+  # Faster PR feedback than waiting for `MainDistributionPipeline.yml`'s
+  # cross-compiled osx_arm64/osx_amd64 jobs (which run inside Docker on
+  # Linux). This is the canonical Apple-Silicon path users will hit.
+  cpp-extension-macos:
+    needs: changes
+    if: ${{ needs.changes.outputs.cpp-extension == 'true' }}
+    runs-on: macos-latest
+    env:
+      GEN: ninja
+      DISABLE_SANITIZER: 1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          brew install ninja ccache pkg-config
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
+          vcpkgGitCommitId: '84bab45d415d22042bd0b9081aea57f362da3f35'
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: cpp-extension-macos
+
+      - name: Build extension (release)
+        working-directory: extensions/openduck
+        env:
+          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: |
+          export PATH="$(brew --prefix ccache)/libexec:$PATH"
+          make release
+
+      - name: SQL logic tests
+        working-directory: extensions/openduck
+        env:
+          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: make test_release
+
+  # ── C++ extension: native Windows (MSVC) build + SQL smoke tests ───────────
+  # Marked allow-failure for now: the gRPC + Arrow + DuckDB combination on
+  # Windows via vcpkg occasionally requires manual workarounds. Treat
+  # this job as a leading indicator while we stabilize the toolchain.
+  cpp-extension-windows:
+    needs: changes
+    if: ${{ needs.changes.outputs.cpp-extension == 'true' }}
+    runs-on: windows-latest
+    continue-on-error: true
+    env:
+      GEN: ninja
+      DISABLE_SANITIZER: 1
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-release
+      VCPKG_TARGET_TRIPLET: x64-windows-static-release
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install ninja
+        run: choco install ninja --no-progress
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
+          vcpkgGitCommitId: '84bab45d415d22042bd0b9081aea57f362da3f35'
+
+      - name: Build extension (release)
+        working-directory: extensions/openduck
+        env:
+          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+        shell: cmd
+        run: make release
+
+      - name: SQL logic tests
+        working-directory: extensions/openduck
+        env:
+          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+        shell: cmd
+        run: make test_release
 
   # Optional: FUSE e2e needs /dev/fuse + privileged runners (see docs/macFUSE.md).
   fuse-e2e-linux:

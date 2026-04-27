@@ -1,14 +1,15 @@
 [package]
 name = "exec-proto"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
 
 [dependencies]
-tonic.workspace = true
-prost.workspace = true
-prost-types.workspace = true
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
 subtle = "2"
+sha2 = "0.10"
 
 [build-dependencies]
 tonic-build = "0.12"

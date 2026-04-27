@@ -10,30 +10,48 @@ endif()
 find_package(gRPC CONFIG REQUIRED)
 
 set(DUCKDB_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../duckdb")
-set(DUCKDB_BUILD "${CMAKE_CURRENT_SOURCE_DIR}/../../build/debug")
+# Extension build directory. Defaults to ../../build/release because
+# release is what `make test` and CI exercise. Override with
+# -DDUCKDB_BUILD=../../build/debug for ASan-friendly local iteration.
+if(NOT DEFINED DUCKDB_BUILD)
+  set(DUCKDB_BUILD "${CMAKE_CURRENT_SOURCE_DIR}/../../build/release")
+endif()
+get_filename_component(DUCKDB_BUILD "${DUCKDB_BUILD}" ABSOLUTE)
+message(STATUS "OpenDuck test linkage: DUCKDB_BUILD=${DUCKDB_BUILD}")
+if(NOT EXISTS "${DUCKDB_BUILD}/extension/openduck/libopenduck_extension.a")
+  message(WARNING
+    "OpenDuck extension archive not found at:\n"
+    "  ${DUCKDB_BUILD}/extension/openduck/libopenduck_extension.a\n"
+    "Build it first with `make release` (or `make debug`, then re-run\n"
+    "  cmake -DDUCKDB_BUILD=...build/debug`) from extensions/openduck/.")
+endif()
 
-add_executable(test_arrow_bridge
-  test_arrow_bridge.cpp
-  ../../src/arrow_bridge.cpp
-)
+# ── Common link set for all C++ test binaries ────────────────────────────────
+# Force the linker to pull in EVERY object file from the OpenDuck
+# extension static lib. Needed because some object files (e.g.
+# `openduck_optimizer.cpp.o`) are only referenced via function-pointer
+# assignment into a stack-allocated `OptimizerExtension` struct;
+# Apple `ld64`'s archive-resolution does not pull those in by default,
+# so the optimizer hook would be silently absent.
+#
+# - macOS: `-Wl,-force_load,<archive>`
+# - Linux / GNU ld: `-Wl,--whole-archive <archive> -Wl,--no-whole-archive`
+#
+# `ld64` does not understand `--whole-archive`; GNU `ld` does not
+# understand `-force_load`; pick per platform.
+if(APPLE)
+  set(OPENDUCK_EXTENSION_LINK
+    "-Wl,-force_load,${DUCKDB_BUILD}/extension/openduck/libopenduck_extension.a")
+else()
+  set(OPENDUCK_EXTENSION_LINK
+    "-Wl,--whole-archive"
+    "${DUCKDB_BUILD}/extension/openduck/libopenduck_extension.a"
+    "-Wl,--no-whole-archive")
+endif()
 
-target_compile_features(test_arrow_bridge PRIVATE cxx_std_17)
-target_compile_options(test_arrow_bridge PRIVATE
-  -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all
-)
-target_link_options(test_arrow_bridge PRIVATE
-  -fsanitize=address -fsanitize=undefined
-)
-
-target_include_directories(test_arrow_bridge PRIVATE
-  ../../src/include
-  ${DUCKDB_SRC}/src/include
-  ${DUCKDB_SRC}/third_party/catch
-)
-
-target_link_libraries(test_arrow_bridge
+set(OPENDUCK_TEST_LINK_LIBS
   Arrow::arrow_static
-  "${DUCKDB_BUILD}/extension/openduck/libopenduck_extension.a"
+  ${OPENDUCK_EXTENSION_LINK}
   "${DUCKDB_BUILD}/src/libduckdb_static.a"
   "${DUCKDB_BUILD}/extension/libduckdb_generated_extension_loader.a"
   "${DUCKDB_BUILD}/extension/core_functions/libcore_functions_extension.a"
@@ -54,4 +72,64 @@ target_link_libraries(test_arrow_bridge
   protobuf::libprotobuf
   Threads::Threads
   ${CMAKE_DL_LIBS}
+)
+
+set(OPENDUCK_TEST_INCLUDE_DIRS
+  ../../src/include
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../build/release/extension/openduck/gen"
+  ${DUCKDB_SRC}/src/include
+  ${DUCKDB_SRC}/third_party/catch
+)
+
+function(openduck_add_test target)
+  add_executable(${target} ${ARGN})
+  target_compile_features(${target} PRIVATE cxx_std_17)
+  target_compile_options(${target} PRIVATE
+    -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all
+  )
+  target_link_options(${target} PRIVATE
+    -fsanitize=address -fsanitize=undefined
+  )
+  target_include_directories(${target} PRIVATE ${OPENDUCK_TEST_INCLUDE_DIRS})
+  target_link_libraries(${target} ${OPENDUCK_TEST_LINK_LIBS})
+endfunction()
+
+openduck_add_test(test_arrow_bridge
+  # `arrow_bridge.cpp` source is no longer compiled directly: with
+  # `-Wl,-force_load` on the OpenDuck extension archive, that .o is
+  # already pulled in (which would cause a duplicate-symbol link
+  # error). Tests now resolve the symbols through the archive.
+  test_arrow_bridge.cpp
+)
+
+openduck_add_test(test_rewriter
+  test_rewriter.cpp
+)
+
+openduck_add_test(test_errors
+  test_errors.cpp
+)
+
+openduck_add_test(test_has_nonremote
+  test_has_nonremote.cpp
+)
+
+openduck_add_test(test_datachunk_to_arrow
+  test_datachunk_to_arrow.cpp
+)
+
+openduck_add_test(test_cross_catalog_insert
+  test_cross_catalog_insert.cpp
+)
+
+openduck_add_test(test_cross_catalog_udc
+  test_cross_catalog_udc.cpp
+)
+
+openduck_add_test(test_attach_integration
+  test_attach_integration.cpp
+)
+
+openduck_add_test(test_cross_catalog_tablefunc
+  test_cross_catalog_tablefunc.cpp
 )

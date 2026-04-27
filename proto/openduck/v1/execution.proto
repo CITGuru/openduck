@@ -12,6 +12,26 @@ service ExecutionService {
   rpc RegisterWorker(WorkerRegistration) returns (RegisterWorkerReply);
   // Workers send periodic heartbeats to keep their registration alive.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatReply);
+
+  // ── Transactions ───────────────────────────────────────────────────────
+  //
+  // BeginTransaction opens a worker connection, runs `BEGIN TRANSACTION`,
+  // and returns an opaque transaction_id. Subsequent ExecuteFragment /
+  // IngestData / Commit / Rollback calls carrying the same transaction_id
+  // are pinned to the same worker connection (gateway affinity + worker
+  // connection registry). The transaction is bound to the caller's
+  // identity (hash of access_token); a different caller cannot reuse it.
+  rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionReply);
+  rpc CommitTransaction(CommitTransactionRequest) returns (CommitTransactionReply);
+  rpc RollbackTransaction(RollbackTransactionRequest) returns (RollbackTransactionReply);
+
+  // ── Cross-catalog data ingest ──────────────────────────────────────────
+  //
+  // Client-streaming RPC. The first chunk MUST carry IngestMetadata;
+  // subsequent chunks carry Arrow IPC batches that the worker appends
+  // into a TEMP TABLE on the pinned connection. A typed BINDER error
+  // is returned if the first chunk is missing metadata.
+  rpc IngestData(stream IngestChunk) returns (IngestReply);
 }
 
 message ExecuteFragmentRequest {
@@ -28,14 +48,45 @@ message ExecuteFragmentRequest {
   // Preferred compute context for routing (e.g. "region=us-east-1").
   // If set, the gateway prefers workers matching this context.
   string compute_context = 6;
+  // If set, the gateway routes this request to the worker pinned to this
+  // transaction (see BeginTransaction); the worker executes on the
+  // pinned connection. Empty = auto-commit on a fresh connection.
+  optional string transaction_id = 7;
 }
 
 message ExecuteFragmentChunk {
   oneof payload {
     ArrowIpcBatch arrow_batch = 1;
+    // Legacy untyped error message. Kept for wire compatibility with
+    // pre-typed-error clients; populated alongside `typed_error` for
+    // every error path. Newer clients should prefer `typed_error`.
     string error = 2;
     bool finished = 3;
   }
+  // Typed error classification. Populated whenever `error` is populated;
+  // also populated for IngestData / transaction RPC error paths funneled
+  // through ExecuteFragmentChunk-shaped responses on shared transports.
+  optional ExecuteFragmentError typed_error = 4;
+}
+
+// Typed error returned alongside the legacy `string error` field.
+// The C++ client maps each kind onto a DuckDB-typed exception
+// (CatalogException, BinderException, ConstraintException, ...).
+message ExecuteFragmentError {
+  enum Kind {
+    UNKNOWN    = 0;
+    CATALOG    = 1;  // table/schema/column not found, unknown txn
+    BINDER     = 2;
+    CONSTRAINT = 3;  // NOT NULL, UNIQUE, CHECK, FK
+    CONVERSION = 4;
+    PARSER     = 5;
+    IO         = 6;
+    PERMISSION = 7;
+    INTERNAL   = 8;
+  }
+  Kind kind                 = 1;
+  string message            = 2;
+  optional string sql_state = 3;
 }
 
 message ArrowIpcBatch {
@@ -49,6 +100,84 @@ message CancelRequest {
 
 message CancelReply {
   bool acknowledged = 1;
+}
+
+// ── Transaction RPCs ────────────────────────────────────────────────────
+
+message BeginTransactionRequest {
+  string database     = 1;
+  string access_token = 2;
+}
+
+message BeginTransactionReply {
+  // Opaque server-issued id (UUID). Carry this in subsequent
+  // ExecuteFragment / IngestData / Commit / Rollback calls.
+  string transaction_id = 1;
+  // Optional typed error; if set, transaction_id is empty and the
+  // BEGIN failed (open / BEGIN error). The client should surface the
+  // typed error rather than treating success/empty-id specially.
+  optional ExecuteFragmentError typed_error = 2;
+}
+
+message CommitTransactionRequest {
+  string transaction_id = 1;
+  string access_token   = 2;
+}
+
+message CommitTransactionReply {
+  optional ExecuteFragmentError typed_error = 1;
+}
+
+message RollbackTransactionRequest {
+  string transaction_id = 1;
+  string access_token   = 2;
+}
+
+message RollbackTransactionReply {
+  optional ExecuteFragmentError typed_error = 1;
+}
+
+// ── IngestData (client-streaming) ───────────────────────────────────────
+
+message IngestChunk {
+  oneof payload {
+    IngestMetadata metadata    = 1;
+    ArrowIpcBatch  arrow_batch = 2;
+  }
+}
+
+// First chunk on every IngestData stream. Defines the staging temp
+// table schema; subsequent chunks append rows into it.
+message IngestMetadata {
+  string database      = 1;
+  // Name of the TEMP TABLE the worker will CREATE on the pinned
+  // connection (typically `__openduck_ingest_<uuid>`). The client
+  // generates this so it can reference it in its follow-up
+  // `INSERT INTO target SELECT * FROM <staging>` ExecuteFragment.
+  string staging_table = 2;
+  repeated IngestColumn columns = 3;
+  // If set, the ingest happens on the pinned worker connection for
+  // this transaction. If unset, the worker opens an implicit
+  // single-stream connection for the lifetime of the ingest.
+  optional string transaction_id = 4;
+  string access_token            = 5;
+}
+
+message IngestColumn {
+  // Column name as it should appear in the staging TEMP TABLE.
+  string name = 1;
+  // SQL type string (e.g. "INTEGER", "DECIMAL(18,4)",
+  // "STRUCT(a INT, b VARCHAR)"). Round-trips DuckDB's `LogicalType`
+  // via `LogicalType::ToString()` on the client; the worker parses
+  // it as DDL fragment when emitting `CREATE TEMP TABLE`.
+  string sql_type = 2;
+}
+
+message IngestReply {
+  uint64 rows_ingested = 1;
+  // Optional typed error; if set, rows_ingested is meaningless and
+  // the staging table has been dropped on the worker.
+  optional ExecuteFragmentError typed_error = 2;
 }
 
 // ── Worker self-description & affinity routing ──────────────────────────

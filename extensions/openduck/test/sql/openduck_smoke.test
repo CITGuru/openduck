@@ -1,0 +1,90 @@
+# name: test/sql/openduck_smoke.test
+# description: cross-platform smoke test for the OpenDuck extension
+#              (registration + URI parsing + ATTACH validation).
+#              No network is required; safe to run on every platform/CI runner.
+# group: [sql]
+
+require openduck
+
+# ── Registration: every public symbol the extension exposes ──────────────────
+#
+# These counts are what the duckdb/community-extensions documentation
+# generator picks up via `SELECT ... FROM duckdb_functions() EXCEPT
+# (FROM functions_pre)`. If a build silently drops one of these (e.g.
+# because of an archive-resolution issue with the static linker), this
+# test will fail before any platform-specific code path is exercised.
+
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'openduck_remote';
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_functions() WHERE function_name = 'openduck_query';
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_extensions() WHERE extension_name = 'openduck' AND loaded = true;
+----
+1
+
+# ── Secret type wiring (CREATE SECRET round-trip is platform-agnostic) ──────
+
+statement ok
+CREATE SECRET smoke_secret (
+    TYPE openduck_storage,
+    postgres_url 'postgres://smoke:5432/db',
+    data_dir '/tmp/smoke'
+);
+
+# postgres_url should be redacted in the listing on every platform.
+query I
+SELECT secret_string LIKE '%postgres_url=redacted%'
+FROM duckdb_secrets() WHERE name = 'smoke_secret';
+----
+true
+
+statement ok
+DROP SECRET smoke_secret;
+
+# ── URI parsing: ResolveAttachConfig() must reject missing tokens ───────────
+#
+# These exercise the parser before any gRPC call is made, so they're
+# safe on hosts with no network egress. The error string comes from
+# `openduck::ResolveAttachConfig` in src/openduck_extension.cpp.
+
+statement error
+ATTACH 'openduck:smoke_db' AS smoke1 (TYPE openduck);
+----
+missing token
+
+# Same path through the `od:` scheme alias.
+statement error
+ATTACH 'od:smoke_db' AS smoke2 (TYPE openduck);
+----
+missing token
+
+# Plain database name (no scheme prefix) should still reach the parser
+# and surface the same error rather than crashing.
+statement error
+ATTACH 'smoke_db' AS smoke3 (TYPE openduck);
+----
+missing token
+
+# ── openduck_query alias resolution (no ATTACH was successful above) ────────
+
+statement error
+SELECT * FROM openduck_query('smoke1', 'SELECT 1');
+----
+No ATTACH config for alias
+
+# ── Argument validation for openduck_remote ─────────────────────────────────
+
+statement error
+SELECT * FROM openduck_remote('http://localhost:9999');
+----
+
+statement error
+SELECT * FROM openduck_remote('http://localhost:9999', 'token', 'SELECT 1', 'extra');
+----
