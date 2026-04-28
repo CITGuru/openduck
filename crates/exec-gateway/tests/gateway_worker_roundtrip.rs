@@ -14,18 +14,20 @@ async fn start_stack(worker_port: u16, gateway_port: u16) {
         let _ = exec_worker::serve(worker).await;
     });
     // Don't sleep-wait — see comment in `edge_cases.rs::start_stack_with_db`.
-    wait_for_tcp(worker_port).await;
+    wait_for_tcp(worker_port, "worker").await;
 
     let gw = ([127, 0, 0, 1], gateway_port).into();
     let workers = vec![format!("http://127.0.0.1:{worker_port}")];
     let _gh = tokio::spawn(async move {
         let _ = exec_gateway::serve(gw, workers).await;
     });
-    wait_for_tcp(gateway_port).await;
+    wait_for_tcp(gateway_port, "gateway").await;
 }
 
-async fn wait_for_tcp(port: u16) {
-    for _ in 0..100 {
+/// 10s budget — see the doc-comment on the equivalent helper in
+/// `edge_cases.rs::wait_for_tcp` for the rationale.
+async fn wait_for_tcp(port: u16, role: &str) {
+    for _ in 0..500 {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .is_ok()
@@ -35,8 +37,9 @@ async fn wait_for_tcp(port: u16) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!(
-        "service on 127.0.0.1:{port} never became reachable — likely \
-         a port collision or the spawned task errored out silently"
+        "{role} on 127.0.0.1:{port} never became reachable within 10s — \
+         likely a port collision with another concurrent test, or the \
+         spawned `serve()` task errored out silently"
     );
 }
 
