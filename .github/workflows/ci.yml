@@ -255,12 +255,24 @@ jobs:
           key: cpp-extension-linux
 
       - name: Build extension (debug)
-        working-directory: extensions/openduck
-        env:
-          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-        run: |
-          export PATH="/usr/lib/ccache:$PATH"
-          make debug
+        # Cold-cache vcpkg builds fetch dozens of upstream source
+        # tarballs; a single transient 502 from `github.com/...`
+        # would otherwise fail the whole job (vcpkg has no built-in
+        # download retry, and the binary cache only helps after a
+        # tarball has been fetched + the package built once).
+        # `nick-fields/retry` re-runs the entire `make` step up to 3
+        # times; the second attempt skips anything vcpkg already
+        # downloaded successfully and only retries what failed.
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 60
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd extensions/openduck
+            export VCPKG_TOOLCHAIN_PATH=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+            export PATH="/usr/lib/ccache:$PATH"
+            make debug
 
       - name: SQL logic tests
         working-directory: extensions/openduck
@@ -324,15 +336,21 @@ jobs:
           key: cpp-extension-macos
 
       - name: Build extension (release)
-        working-directory: extensions/openduck
-        env:
-          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-        run: |
-          # ccache shim first; brew's keg-only bison overrides the
-          # ancient Apple-shipped /usr/bin/bison (vcpkg's `thrift` port
-          # requires bison >= 2.5).
-          export PATH="$(brew --prefix ccache)/libexec:$(brew --prefix bison)/bin:$PATH"
-          make release
+        # Wrap in retry — see comment on the Linux equivalent for why.
+        # Cold-cache vcpkg can lose to transient github.com archive 502s.
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 60
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd extensions/openduck
+            export VCPKG_TOOLCHAIN_PATH=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+            # ccache shim first; brew's keg-only bison overrides the
+            # ancient Apple-shipped /usr/bin/bison (vcpkg's `thrift`
+            # port requires bison >= 2.5).
+            export PATH="$(brew --prefix ccache)/libexec:$(brew --prefix bison)/bin:$PATH"
+            make release
 
       - name: SQL logic tests
         working-directory: extensions/openduck
@@ -385,11 +403,22 @@ jobs:
           vcpkgGitCommitId: '84bab45d415d22042bd0b9081aea57f362da3f35'
 
       - name: Build extension (release)
-        working-directory: extensions/openduck
-        env:
-          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-        shell: cmd
-        run: make release
+        # Wrap in retry — see comment on the Linux equivalent for why.
+        # The Windows job hits this failure mode the most: it's a
+        # third triplet (`x64-windows-static-release`) so its binary
+        # cache starts cold even when Linux/macOS are warm, and every
+        # one of its source-tarball downloads is one transient 502
+        # away from sinking the run.
+        uses: nick-fields/retry@v3
+        with:
+          shell: cmd
+          timeout_minutes: 90
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd extensions\openduck
+            set VCPKG_TOOLCHAIN_PATH=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
+            make release
 
       - name: SQL logic tests
         working-directory: extensions/openduck
