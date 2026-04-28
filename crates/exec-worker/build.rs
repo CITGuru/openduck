@@ -24,13 +24,24 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
-    // Only the MSVC ABI requires us to spell out the system libs;
-    // GNU / mingw resolves them differently and does not need this
-    // workaround.
-    if target_os == "windows" && target_env == "msvc" {
+    // Both MSVC and mingw need the Windows system libraries spelled
+    // out — DuckDB's `local_file_system.cpp` calls into the Restart
+    // Manager API (`RmStartSession` etc., from `Rstrtmgr.lib`) and
+    // also pulls in `ws2_32` and `bcrypt`. Apple/Linux don't need
+    // any of this.
+    if target_os == "windows" {
+        // `cargo:warning=...` shows up in CI logs; useful for
+        // confirming this build script ran at all on the Windows
+        // runner. Remove once we're confident.
+        println!(
+            "cargo:warning=exec-worker/build.rs: emitting Windows native link libs \
+             (target_os={target_os}, target_env={target_env}); see file header for context"
+        );
         // Mirror DuckDB's `src/CMakeLists.txt` Windows branch:
         //   set(DUCKDB_SYSTEM_LIBS ${DUCKDB_SYSTEM_LIBS} ws2_32 rstrtmgr)
         //   set(DUCKDB_SYSTEM_LIBS ${DUCKDB_SYSTEM_LIBS} bcrypt)
+        // Use lowercase names — MSVC's library lookup is case-insensitive,
+        // but mingw's is sometimes not.
         println!("cargo:rustc-link-lib=dylib=ws2_32");
         println!("cargo:rustc-link-lib=dylib=rstrtmgr");
         println!("cargo:rustc-link-lib=dylib=bcrypt");
@@ -40,4 +51,5 @@ fn main() {
     // depends on no files.
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ENV");
+    println!("cargo:rerun-if-changed=build.rs");
 }
