@@ -260,6 +260,24 @@ If you're using DuckLake but still fall back to a `.duckdb` file for things Duck
 | **Together**         | DuckLake catalog on a remote worker → OpenDuck streams results to the client |
 
 
+## Documentation
+
+Full docs live in [`docs/`](docs/):
+
+- [Overview](docs/overview.md) — what OpenDuck is, problems it solves, comparisons.
+- [Architecture](docs/architecture.md) — components, protocol, data flow, security model.
+- [Configuration](docs/configuration.md) — every CLI flag, env var, TOML key, and DuckDB secret.
+- Guides:
+  - [Getting started](docs/guides/getting-started.md) — clone → build → first query.
+  - [Python client](docs/guides/python-client.md) — the `openduck` package API and patterns.
+  - [DuckDB extension](docs/guides/duckdb-extension.md) — `LOAD`, `ATTACH`, URI format, secrets, table functions.
+  - [Differential storage](docs/guides/differential-storage.md) — append-only layers, snapshots, the three storage modes.
+  - [Hybrid execution](docs/guides/hybrid-execution.md) — `--hybrid`, `openduck_run`, plan splitting.
+  - [Snapshots and garbage collection](docs/guides/snapshots-and-gc.md) — sealing, point-in-time reads, retention.
+  - [Deployment](docs/guides/deployment.md) — single-process, multi-worker, Docker, observability.
+  - [Troubleshooting](docs/guides/troubleshooting.md) — common errors and fixes.
+
+
 ## Acknowledgments
 
 OpenDuck's architecture draws heavily from MotherDuck's published work on [differential storage](https://motherduck.com/blog/differential-storage-building-block-for-data-warehouse/), [dual execution](https://motherduck.com/videos/bringing-duckdb-to-the-cloud-dual-execution-explained/), and [cloud-native DuckDB](https://motherduck.com/duckdb-book-summary-chapter7/). Credit to the MotherDuck team for pioneering these ideas.

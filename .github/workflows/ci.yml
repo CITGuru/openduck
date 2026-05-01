@@ -140,13 +140,21 @@ jobs:
           DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
         run: cargo test -p diff-bridge -- --ignored
 
-  # ── Rust workspace: cross-platform smoke on macOS + Windows ─────────────────
+  # ── Rust workspace: cross-platform smoke on macOS (+ Windows, currently disabled) ─
   # We can't spin up the `postgres:` service on non-Linux runners and the
   # FUSE crate does not build on Windows, so we narrow the set of crates
   # to the platform-portable ones and skip the integration tests that
   # require DATABASE_URL. The goal is to catch regressions in our
   # cross-platform code (proto, gateway/worker stubs, blob/layer/metrics)
   # without having to provision Postgres outside of Linux.
+  #
+  # The Windows leg is temporarily disabled — `libduckdb-sys`'s missing
+  # Windows system-library link metadata + transient vcpkg upstream-archive
+  # 502s have been generating noise faster than we can investigate. Our
+  # `crates/exec-worker/build.rs` workaround is in place but unverified on
+  # the actual Windows runner. Re-enable by uncommenting the
+  # `windows-latest` matrix entry and dropping the `if: …` guard once we
+  # have a known-good run.
   rust-cross-platform:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -156,8 +164,8 @@ jobs:
         include:
           - os: macos-latest
             exclude_crates: '--exclude diff-fuse'
-          - os: windows-latest
-            exclude_crates: '--exclude diff-fuse'
+          # - os: windows-latest        # temporarily disabled — see header
+          #   exclude_crates: '--exclude diff-fuse'
     runs-on: ${{ matrix.os }}
     env:
       # Ensure sqlx queries are validated against the offline cache rather
@@ -361,12 +369,22 @@ jobs:
           make test_release
 
   # ── C++ extension: native Windows (MSVC) build + SQL smoke tests ───────────
-  # Marked allow-failure for now: the gRPC + Arrow + DuckDB combination on
-  # Windows via vcpkg occasionally requires manual workarounds. Treat
-  # this job as a leading indicator while we stabilize the toolchain.
+  # ⚠️ TEMPORARILY DISABLED. The gRPC + Arrow + DuckDB combination on
+  # Windows via vcpkg has been generating noise faster than we can
+  # investigate (transient github.com archive 502s, missing
+  # libduckdb-sys link metadata, vcpkg's `x-windows-static-release`
+  # cold-cache size). Our Windows-specific link workaround in
+  # `crates/exec-worker/build.rs` is in place but unverified end-to-end.
+  #
+  # To re-enable: change `if: false` below back to
+  # `if: ${{ needs.changes.outputs.cpp-extension == 'true' }}` (also
+  # un-comment the windows entry in `rust-cross-platform`'s matrix).
+  # Suggested precondition for re-enabling: one successful manual run
+  # (workflow_dispatch) on the branch with all retries exhausting at
+  # most once.
   cpp-extension-windows:
     needs: changes
-    if: ${{ needs.changes.outputs.cpp-extension == 'true' }}
+    if: false   # was: ${{ needs.changes.outputs.cpp-extension == 'true' }}
     runs-on: windows-latest
     continue-on-error: true
     env:
