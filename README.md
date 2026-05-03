@@ -1,8 +1,8 @@
 # OpenDuck
 
-An open-source implementation of the ideas pioneered by [MotherDuck](https://motherduck.com) — differential storage, hybrid (dual) execution, and transparent remote databases for DuckDB — available for anyone to run, extend, and build on.
+OpenDuck makes DuckDB work like a cloud database without giving up its embedded-DB feel. You attach a remote database in one line — `ATTACH 'openduck:mydb'` — tables resolve transparently, a single query can split its work across your laptop and a remote worker, and storage underneath is layered, snapshot-based, and concurrency-safe. It's a DuckDB extension plus a small Rust gateway/worker speaking an open gRPC + Arrow IPC protocol, so you self-host the whole thing or plug your own backend in.
 
-MotherDuck showed that DuckDB can work beautifully in the cloud: `ATTACH 'md:mydb'`, and remote tables appear local. Queries split transparently across your laptop and the cloud. Storage is layered and snapshot-based. OpenDuck takes those architectural ideas — [differential storage](https://motherduck.com/blog/differential-storage-building-block-for-data-warehouse/), [dual execution](https://motherduck.com/videos/bringing-duckdb-to-the-cloud-dual-execution-explained/), the attach-based UX — and makes them open. Open protocol, open backend, open extension.
+The architecture follows the path [MotherDuck](https://motherduck.com) pioneered with [differential storage](https://motherduck.com/blog/differential-storage-building-block-for-data-warehouse/), [dual execution](https://motherduck.com/videos/bringing-duckdb-to-the-cloud-dual-execution-explained/), and the `md:` attach scheme. OpenDuck reimplements those ideas as an open protocol and an open backend you can run yourself.
 
 ```python
 import duckdb
@@ -258,6 +258,24 @@ If you're using DuckLake but still fall back to a `.duckdb` file for things Duck
 | **Concurrency**      | Parquet files are immutable           | Snapshot isolation on `.duckdb` files        |
 | **Remote access**    | Not built-in                          | `ATTACH 'openduck:...'` + hybrid execution  |
 | **Together**         | DuckLake catalog on a remote worker → OpenDuck streams results to the client |
+
+
+## Documentation
+
+Full docs live in [`docs/`](docs/):
+
+- [Overview](docs/overview.md) — what OpenDuck is, problems it solves, comparisons.
+- [Architecture](docs/architecture.md) — components, protocol, data flow, security model.
+- [Configuration](docs/configuration.md) — every CLI flag, env var, TOML key, and DuckDB secret.
+- Guides:
+  - [Getting started](docs/guides/getting-started.md) — clone → build → first query.
+  - [Python client](docs/guides/python-client.md) — the `openduck` package API and patterns.
+  - [DuckDB extension](docs/guides/duckdb-extension.md) — `LOAD`, `ATTACH`, URI format, secrets, table functions.
+  - [Differential storage](docs/guides/differential-storage.md) — append-only layers, snapshots, the three storage modes.
+  - [Hybrid execution](docs/guides/hybrid-execution.md) — `--hybrid`, `openduck_run`, plan splitting.
+  - [Snapshots and garbage collection](docs/guides/snapshots-and-gc.md) — sealing, point-in-time reads, retention.
+  - [Deployment](docs/guides/deployment.md) — single-process, multi-worker, Docker, observability.
+  - [Troubleshooting](docs/guides/troubleshooting.md) — common errors and fixes.
 
 
 ## Acknowledgments

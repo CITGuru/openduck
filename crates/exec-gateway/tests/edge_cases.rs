@@ -29,14 +29,51 @@ async fn start_stack_with_db(worker_port: u16, gateway_port: u16, db_path: Optio
     let _wh = tokio::spawn(async move {
         let _ = exec_worker::serve_with_config(worker, config).await;
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // ⚠️ Don't sleep-wait — that races on slow CI hardware (the
+    // 200ms expires before the spawned task's `bind()` returns) and
+    // surfaces as a misleading `tcp connect error … Connection
+    // refused` in the test, instead of a clear "service never came
+    // up" panic. Probe the port until it accepts a TCP connection
+    // (10s budget — file-backed DuckDB cold-start under cargo's
+    // parallel test execution is not fast).
+    wait_for_tcp(worker_port, "worker").await;
 
     let gw = ([127, 0, 0, 1], gateway_port).into();
     let workers = vec![format!("http://127.0.0.1:{worker_port}")];
     let _gh = tokio::spawn(async move {
         let _ = exec_gateway::serve(gw, workers).await;
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_tcp(gateway_port, "gateway").await;
+}
+
+/// Poll `127.0.0.1:port` until a TCP `connect` succeeds, or panic
+/// after ~10s. Replaces the older `sleep(200ms)` "wait for ready"
+/// pattern that flaked on slow CI runners. Mirrors the helper in
+/// `tests/common/mod.rs` (kept private here so this file stays
+/// self-contained).
+///
+/// `role` is just a tag for the panic message ("worker" / "gateway")
+/// so a failure tells you *which* sub-step never came up.
+async fn wait_for_tcp(port: u16, role: &str) {
+    // 10s budget = 500 × 20ms. File-backed DuckDB workers take
+    // 200-2000ms to cold-start under `cargo test` parallelism on a
+    // shared CI runner; in-memory tests usually finish in <100ms,
+    // so the higher ceiling costs nothing in the happy path.
+    for _ in 0..500 {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!(
+        "{role} on 127.0.0.1:{port} never became reachable within 10s — \
+         likely a port collision with another concurrent test, or the \
+         spawned `serve()` task errored out silently. Re-run with \
+         `RUST_LOG=trace` to see the spawned task's output."
+    );
 }
 
 fn temp_db(name: &str) -> PathBuf {

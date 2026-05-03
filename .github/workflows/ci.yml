@@ -9,6 +9,39 @@ on:
 env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: false
+  # Use the GH Actions cache for vcpkg's already-built dependency
+  # binaries (openssl, abseil, grpc, protobuf, arrow, …). Two wins:
+  #   1. Subsequent runs skip the from-source rebuild entirely, so a
+  #      transient upstream-archive 502 (e.g. github.com/openssl/openssl
+  #      tarball download) doesn't fail the build.
+  #   2. Cold builds drop from ~25 min to ~3 min once the cache is warm.
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+  # ── CI build-size diet ───────────────────────────────────────────────
+  # GH-hosted Linux runners only have ~14 GB of free root disk. The
+  # workspace pulls in `duckdb-rs` (compiles DuckDB from source) plus
+  # arrow / sqlx / tonic / tokio, and cargo's full DWARF debug info
+  # alone can push `target/` over 8 GB. These env vars override the
+  # dev/test profile JUST FOR CI without modifying Cargo.toml (which
+  # would degrade local debugging UX). Effects:
+  #   - `debug = "line-tables-only"`: line numbers in panics, no full
+  #     DWARF — shrinks `target/` by ~50 %.
+  #   - `incremental = false`: don't store per-crate incremental
+  #     metadata (CI builds clean each run anyway, sharded via
+  #     Swatinem/rust-cache).
+  #   - `CARGO_NET_RETRY = 5`: ride out transient registry blips
+  #     during `cargo fetch` instead of failing the whole job.
+  CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+  CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "5"
+
+# Required by `actions/cache` (which `x-gha` uses under the hood) and by
+# `actions/cache@v4`'s GH-token-based eviction calls. Without these,
+# `x-gha` falls back to read-only mode and the cache never gets seeded.
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   changes:
@@ -25,10 +58,13 @@ jobs:
             rust:
               - 'crates/**'
               - 'proto/openduck/v1/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
             cpp-extension:
               - 'extensions/openduck/**'
               - 'proto/openduck/v1/**'
 
+  # ── Rust workspace: full suite on Linux (with Postgres + FUSE deps) ─────────
   rust:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
@@ -50,6 +86,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Linux GH-hosted runners ship with ~30 GB of preinstalled tools
+      # (Android SDK, .NET, GHC, CodeQL, large container images, etc.)
+      # we don't use. Building the workspace through `duckdb-rs`
+      # (which compiles DuckDB's full C++ tree from inside cargo)
+      # plus all our other deps overflows the ~14 GB of free root
+      # disk and trips `rustc-LLVM ERROR: No space left on device`.
+      # Reclaim the headroom before doing anything else.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false   # keep .NET/Java toolcache so other steps don't break
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false  # skip — these prune calls are the slow ones
+          docker-images: true
+          swap-storage: true
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -86,6 +140,72 @@ jobs:
           DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
         run: cargo test -p diff-bridge -- --ignored
 
+  # ── Rust workspace: cross-platform smoke on macOS (+ Windows, currently disabled) ─
+  # We can't spin up the `postgres:` service on non-Linux runners and the
+  # FUSE crate does not build on Windows, so we narrow the set of crates
+  # to the platform-portable ones and skip the integration tests that
+  # require DATABASE_URL. The goal is to catch regressions in our
+  # cross-platform code (proto, gateway/worker stubs, blob/layer/metrics)
+  # without having to provision Postgres outside of Linux.
+  #
+  # The Windows leg is temporarily disabled — `libduckdb-sys`'s missing
+  # Windows system-library link metadata + transient vcpkg upstream-archive
+  # 502s have been generating noise faster than we can investigate. Our
+  # `crates/exec-worker/build.rs` workaround is in place but unverified on
+  # the actual Windows runner. Re-enable by uncommenting the
+  # `windows-latest` matrix entry and dropping the `if: …` guard once we
+  # have a known-good run.
+  rust-cross-platform:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            exclude_crates: '--exclude diff-fuse'
+          # - os: windows-latest        # temporarily disabled — see header
+          #   exclude_crates: '--exclude diff-fuse'
+    runs-on: ${{ matrix.os }}
+    env:
+      # Ensure sqlx queries are validated against the offline cache rather
+      # than reaching out to a Postgres server we don't have on these
+      # runners.
+      SQLX_OFFLINE: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo build (portable crates)
+        run: cargo build --workspace --all-targets ${{ matrix.exclude_crates }}
+
+      - name: cargo clippy (portable crates)
+        run: cargo clippy --workspace --all-targets ${{ matrix.exclude_crates }} -- -D warnings
+
+      # Only run tests for crates that don't need a live Postgres or FUSE.
+      - name: cargo test (no-db crates)
+        run: >-
+          cargo test
+          -p exec-proto
+          -p diff-core
+          -p diff-blob
+          -p diff-layer-fs
+          -p openduck-metrics
+
+  # ── C++ extension: full build + tests on Linux (canonical platform) ────────
   cpp-extension:
     needs: changes
     if: ${{ needs.changes.outputs.cpp-extension == 'true' }}
@@ -100,10 +220,36 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      # vcpkg-built dependencies + DuckDB submodule + extension build
+      # tree easily exceed the ~14 GB of free root disk on Linux
+      # GH-hosted runners. Strip out the preinstalled tools we don't
+      # need before doing anything that writes to disk.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: true
+
       - name: Install dependencies
+        # Ubuntu's `bison` package is 3.x — well above thrift's >= 2.5
+        # requirement — but it's not in the default runner image, so
+        # we install it explicitly. Same with `flex` for any vcpkg
+        # port that needs a lex generator.
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build ccache
+          sudo apt-get install -y ninja-build ccache bison flex
+
+      - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
@@ -117,12 +263,24 @@ jobs:
           key: cpp-extension-linux
 
       - name: Build extension (debug)
-        working-directory: extensions/openduck
-        env:
-          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-        run: |
-          export PATH="/usr/lib/ccache:$PATH"
-          make debug
+        # Cold-cache vcpkg builds fetch dozens of upstream source
+        # tarballs; a single transient 502 from `github.com/...`
+        # would otherwise fail the whole job (vcpkg has no built-in
+        # download retry, and the binary cache only helps after a
+        # tarball has been fetched + the package built once).
+        # `nick-fields/retry` re-runs the entire `make` step up to 3
+        # times; the second attempt skips anything vcpkg already
+        # downloaded successfully and only retries what failed.
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 60
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd extensions/openduck
+            export VCPKG_TOOLCHAIN_PATH=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+            export PATH="/usr/lib/ccache:$PATH"
+            make debug
 
       - name: SQL logic tests
         working-directory: extensions/openduck
@@ -139,6 +297,153 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug
           cmake --build build
           ./build/test_arrow_bridge
+
+  # ── C++ extension: native macOS build + SQL smoke tests ────────────────────
+  # Faster PR feedback than waiting for `MainDistributionPipeline.yml`'s
+  # cross-compiled osx_arm64/osx_amd64 jobs (which run inside Docker on
+  # Linux). This is the canonical Apple-Silicon path users will hit.
+  cpp-extension-macos:
+    needs: changes
+    if: ${{ needs.changes.outputs.cpp-extension == 'true' }}
+    runs-on: macos-latest
+    env:
+      GEN: ninja
+      DISABLE_SANITIZER: 1
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install dependencies
+        # `bison` is required because Apple ships an ancient bison 2.3
+        # (license reasons) and several vcpkg ports — notably `thrift`
+        # — require >= 2.5. Homebrew's `bison` is keg-only, so the
+        # later step prepends `/opt/homebrew/opt/bison/bin` to PATH
+        # to make sure vcpkg picks it up over the system binary.
+        run: |
+          brew install ninja ccache pkg-config bison
+
+      - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
+          vcpkgGitCommitId: '84bab45d415d22042bd0b9081aea57f362da3f35'
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: cpp-extension-macos
+
+      - name: Build extension (release)
+        # Wrap in retry — see comment on the Linux equivalent for why.
+        # Cold-cache vcpkg can lose to transient github.com archive 502s.
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 60
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd extensions/openduck
+            export VCPKG_TOOLCHAIN_PATH=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+            # ccache shim first; brew's keg-only bison overrides the
+            # ancient Apple-shipped /usr/bin/bison (vcpkg's `thrift`
+            # port requires bison >= 2.5).
+            export PATH="$(brew --prefix ccache)/libexec:$(brew --prefix bison)/bin:$PATH"
+            make release
+
+      - name: SQL logic tests
+        working-directory: extensions/openduck
+        env:
+          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: |
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          make test_release
+
+  # ── C++ extension: native Windows (MSVC) build + SQL smoke tests ───────────
+  # ⚠️ TEMPORARILY DISABLED. The gRPC + Arrow + DuckDB combination on
+  # Windows via vcpkg has been generating noise faster than we can
+  # investigate (transient github.com archive 502s, missing
+  # libduckdb-sys link metadata, vcpkg's `x-windows-static-release`
+  # cold-cache size). Our Windows-specific link workaround in
+  # `crates/exec-worker/build.rs` is in place but unverified end-to-end.
+  #
+  # To re-enable: change `if: false` below back to
+  # `if: ${{ needs.changes.outputs.cpp-extension == 'true' }}` (also
+  # un-comment the windows entry in `rust-cross-platform`'s matrix).
+  # Suggested precondition for re-enabling: one successful manual run
+  # (workflow_dispatch) on the branch with all retries exhausting at
+  # most once.
+  cpp-extension-windows:
+    needs: changes
+    if: false   # was: ${{ needs.changes.outputs.cpp-extension == 'true' }}
+    runs-on: windows-latest
+    continue-on-error: true
+    env:
+      GEN: ninja
+      DISABLE_SANITIZER: 1
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-release
+      VCPKG_TARGET_TRIPLET: x64-windows-static-release
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install ninja
+        run: choco install ninja --no-progress
+
+      - name: Export GitHub Actions cache URLs (for vcpkg x-gha)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
+          vcpkgGitCommitId: '84bab45d415d22042bd0b9081aea57f362da3f35'
+
+      - name: Build extension (release)
+        # Wrap in retry — see comment on the Linux equivalent for why.
+        # The Windows job hits this failure mode the most: it's a
+        # third triplet (`x64-windows-static-release`) so its binary
+        # cache starts cold even when Linux/macOS are warm, and every
+        # one of its source-tarball downloads is one transient 502
+        # away from sinking the run.
+        uses: nick-fields/retry@v3
+        with:
+          shell: cmd
+          timeout_minutes: 90
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd extensions\openduck
+            set VCPKG_TOOLCHAIN_PATH=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
+            make release
+
+      - name: SQL logic tests
+        working-directory: extensions/openduck
+        env:
+          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+        shell: cmd
+        run: make test_release
 
   # Optional: FUSE e2e needs /dev/fuse + privileged runners (see docs/macFUSE.md).
   fuse-e2e-linux:

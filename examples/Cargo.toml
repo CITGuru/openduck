@@ -1,8 +1,8 @@
 [package]
 name = "openduck-examples"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
 publish = false
 
 [[example]]
@@ -65,6 +65,10 @@ path = "rust/federation_provider.rs"
 name = "gc_walkthrough"
 path = "rust/gc_walkthrough.rs"
 
+[[example]]
+name = "live_tx_ingest"
+path = "rust/live_tx_ingest.rs"
+
 [dependencies]
 exec-worker = { path = "../crates/exec-worker" }
 exec-gateway = { path = "../crates/exec-gateway" }
@@ -73,10 +77,11 @@ diff-core = { path = "../crates/diff-core" }
 diff-metadata = { path = "../crates/diff-metadata" }
 diff-bridge = { path = "../crates/diff-bridge" }
 openduck-metrics = { path = "../crates/openduck-metrics" }
-duckdb = { version = "1.10501", features = ["bundled"] }
-tokio.workspace = true
-tokio-stream.workspace = true
-tonic.workspace = true
-sqlx.workspace = true
-uuid.workspace = true
+duckdb = { version = "1.10502", features = ["bundled"] }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
 tempfile = "3"
+arrow = { version = "58", default-features = false, features = ["ipc"] }

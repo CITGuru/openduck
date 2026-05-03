@@ -48,6 +48,12 @@ public:
 	bool InMemory() override;
 	std::string GetDBPath() override;
 
+	/// Cache probe used by the `CatalogReferenceRewriter` Rule C.
+	/// Returns true when `(schema, table)` names an entry currently
+	/// cached on one of this catalog's schemas. Case-insensitive.
+	/// Never issues a network call.
+	bool HasSchemaOrTable(const std::string &schema, const std::string &table);
+
 	duckdb::PhysicalOperator &PlanCreateTableAs(duckdb::ClientContext &context,
 	                                             duckdb::PhysicalPlanGenerator &planner,
 	                                             duckdb::LogicalCreateTable &op,
@@ -59,6 +65,10 @@ public:
 	                                      duckdb::LogicalDelete &op, duckdb::PhysicalOperator &plan) override;
 	duckdb::PhysicalOperator &PlanUpdate(duckdb::ClientContext &context, duckdb::PhysicalPlanGenerator &planner,
 	                                      duckdb::LogicalUpdate &op, duckdb::PhysicalOperator &plan) override;
+	duckdb::PhysicalOperator &PlanMergeInto(duckdb::ClientContext &context,
+	                                         duckdb::PhysicalPlanGenerator &planner,
+	                                         duckdb::LogicalMergeInto &op,
+	                                         duckdb::PhysicalOperator &plan) override;
 
 	void DropSchema(duckdb::ClientContext &context, duckdb::DropInfo &info) override;
 
@@ -71,7 +81,40 @@ private:
 class OpenDuckTransaction : public duckdb::Transaction {
 public:
 	OpenDuckTransaction(duckdb::TransactionManager &manager, duckdb::ClientContext &context);
+
+	/// Server-issued transaction id. Empty until the first remote DDL
+	/// or DML operation inside this transaction flips acquisition on
+	/// via `EnsureAcquired` (lazy acquisition).
+	std::string transaction_id;
+	/// Flips true once `BeginTransaction` returns on the worker. While
+	/// false, `CommitTransaction` / `RollbackTransaction` at the
+	/// manager level skip the RPC entirely (no remote state exists).
+	bool acquired = false;
 };
+
+/// Ensure the current user transaction (if any) has been acquired on
+/// the worker. Returns the bound `transaction_id`, or an empty string
+/// when the caller is in auto-commit mode (in which case the worker
+/// runs each statement on a fresh connection).
+///
+/// Must be called from every DDL / DML hook before issuing any gRPC
+/// call to the worker.
+std::string EnsureAcquired(duckdb::ClientContext &context, OpenDuckCatalog &catalog);
+
+/// Re-parse `context.GetCurrentQuery()`, strip the attached-catalog
+/// qualifier from every table / column reference using
+/// `CatalogReferenceRewriter`, and return the result as a SQL string
+/// the worker can execute directly. Throws `BinderException` when the
+/// current query text is empty (programmatic call path — the design
+/// doc's §1 "Fallback for programmatic statements" is not yet
+/// implemented in this build).
+std::string BuildForwardedSQL(duckdb::ClientContext &context, OpenDuckCatalog &catalog);
+
+/// Convenience: run `BuildForwardedSQL`, ship it to the worker on the
+/// current transaction (via `EnsureAcquired`), and drain the result
+/// stream. Used for DDL paths that don't return rows to the caller
+/// (CREATE / DROP / ALTER / CREATE SCHEMA / DROP SCHEMA).
+void ForwardDDL(duckdb::ClientContext &context, OpenDuckCatalog &catalog);
 
 class OpenDuckTransactionManager : public duckdb::TransactionManager {
 public:

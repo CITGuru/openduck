@@ -8,6 +8,8 @@
 
 namespace duckdb {
 
+struct DBConfig;
+
 class OpenduckExtension : public Extension {
 public:
 	void Load(ExtensionLoader &loader) override;
@@ -19,6 +21,17 @@ public:
 
 namespace openduck {
 
+/// Test-only helper: register the OpenDuck storage extensions (`openduck`
+/// and `od` schemes) directly on a `DBConfig`. Production code loads
+/// these via `DUCKDB_CPP_EXTENSION_ENTRY` through DuckDB's extension
+/// loader; tests that statically link `libopenduck_extension.a` call
+/// this instead.
+void RegisterStorageExtensionsForTest(duckdb::DBConfig &config);
+
+} // namespace openduck
+
+namespace openduck {
+
 struct AttachConfig {
 	std::string scheme;
 	std::string database;
@@ -26,6 +39,10 @@ struct AttachConfig {
 	std::string token;
 	std::string error;
 	bool valid = false;
+	/// Set by the storage extension's attach handler from
+	/// `AttachOptions::access_mode`. When true, `EnsureWritable(catalog)`
+	/// throws `PermissionException` for every mutation-capable hook.
+	bool read_only = false;
 };
 
 AttachConfig ResolveAttachConfig(const std::string &uri);

@@ -8,5 +8,7 @@
 *.duckdb
 *.log
 .sqlx
-/docs/
+/docs/internal/
 /target/
+mydb
+.cache/*

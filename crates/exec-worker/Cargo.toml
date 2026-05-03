@@ -1,8 +1,21 @@
 [package]
 name = "exec-worker"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+# Tell cargo this package owns native-link metadata. Required so the
+# `cargo:rustc-link-lib` directives emitted from `build.rs`
+# (workaround for `libduckdb-sys` missing Windows system libs —
+# see `build.rs` for the full story) are properly propagated to
+# every downstream binary's link line. Without `links = ...`, cargo
+# applies the directives only to this crate's own compilation
+# units and they silently drop on the floor for benches /
+# examples / dependents.
+#
+# The value is an arbitrary identifier; it must be unique across
+# the whole dependency graph so cargo can detect double-link of
+# the same native library.
+links = "openduck-duckdb-sys-windows-shim"
 
 [lib]
 path = "src/lib.rs"
@@ -17,12 +30,12 @@ harness = false
 
 [dependencies]
 exec-proto = { path = "../exec-proto" }
-tokio.workspace = true
-tokio-stream.workspace = true
-tonic.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-duckdb = { version = "1.10501", features = ["bundled"] }
+tokio = { workspace = true } 
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+duckdb = { version = "1.10502", features = ["bundled", "appender-arrow"] }
 arrow = { version = "58", default-features = false, features = ["ipc"] }
-uuid.workspace = true
+uuid = { workspace = true }
 

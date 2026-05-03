@@ -622,6 +622,7 @@ async fn run_query(
             access_token: token.into(),
             execution_id: String::new(),
             compute_context: String::new(),
+            transaction_id: None,
         }))
         .await?
         .into_inner();
@@ -732,6 +733,7 @@ async fn run_status(endpoint: &str, token: &str) -> Result<(), Box<dyn std::erro
             access_token: token.into(),
             execution_id: String::new(),
             compute_context: String::new(),
+            transaction_id: None,
         }))
         .await;
 

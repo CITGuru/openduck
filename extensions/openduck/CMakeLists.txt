@@ -53,6 +53,14 @@ set(EXTENSION_SOURCES
   src/openduck_schema.cpp
   src/openduck_table_entry.cpp
   src/openduck_filesystem.cpp
+  src/openduck_errors.cpp
+  src/openduck_has_nonremote_reference.cpp
+  src/openduck_mutate.cpp
+  src/openduck_ingest.cpp
+  src/openduck_optimizer.cpp
+  src/openduck_sql_emit.cpp
+  src/catalog_reference_rewriter.cpp
+  src/datachunk_to_arrow.cpp
   src/grpc_client.cpp
   src/arrow_bridge.cpp
   "${PROTO_OUT}/openduck/v1/execution.pb.cc"

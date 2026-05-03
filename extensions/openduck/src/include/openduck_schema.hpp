@@ -3,8 +3,14 @@
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 
+namespace duckdb {
+struct CreateTableInfo;
+} // namespace duckdb
+
 namespace openduck {
 
+class GrpcClient;
+struct AttachConfig;
 class OpenDuckCatalog;
 
 class OpenDuckSchemaEntry : public duckdb::SchemaCatalogEntry {
@@ -45,8 +51,48 @@ public:
 
 	OpenDuckCatalog &GetOpenDuckCatalog();
 
+	/// Case-insensitive cache probe for the rewriter's Rule C.
+	/// Returns true if `table_name` is currently in the local table
+	/// cache; never makes a network call.
+	bool HasCachedTable(const std::string &table_name) const;
+
 private:
+	/// Probe the worker's `duckdb_constraints()` for the given table
+	/// and attach PRIMARY KEY / UNIQUE / NOT NULL constraints onto
+	/// `info`. Best-effort: any failure (e.g. older worker without
+	/// `duckdb_constraints()`) silently leaves `info` constraint-less.
+	void FetchAndAttachConstraints(GrpcClient &client, const AttachConfig &config,
+	                                const std::string &table_name,
+	                                duckdb::CreateTableInfo &info);
+
+	/// Best-effort: run ONE batched query against the worker combining
+	/// `duckdb_columns()` and `duckdb_constraints()` filtered to this
+	/// schema, populate `cached_tables_` with every table it finds,
+	/// and set `schema_loaded_`. Safe to call repeatedly; skips work
+	/// if `schema_loaded_` is already true.
+	///
+	/// Modeled on duckdb-postgres' `PostgresTableSet::GetInitializeQuery`
+	/// pattern: one remote round-trip reflects every table in the schema
+	/// at once, replacing the per-table `SELECT * FROM t LIMIT 0 +
+	/// duckdb_constraints()` loop which is O(N) round-trips.
+	///
+	/// `context` is required because `duckdb_columns().data_type` returns
+	/// type strings (e.g. `"INTEGER"`, `"DECIMAL(18,3)"`) that
+	/// `Parser::ParseColumnDefinition` only resolves to
+	/// `LogicalTypeId::UNBOUND`. We resolve them to concrete
+	/// `LogicalType`s by issuing a single local
+	/// `SELECT CAST(NULL AS t1), CAST(NULL AS t2), ...` against
+	/// `context.db` and reading the result schema back. This is one
+	/// extra in-process query per ATTACH-schema-load, no extra remote
+	/// round-trips.
+	///
+	/// On any failure, the flag stays false and `LookupEntry` falls
+	/// back to its per-table path — no user-visible error.
+	void EnsureSchemaLoaded(duckdb::ClientContext &context,
+	                        GrpcClient &client, const AttachConfig &config);
+
 	duckdb::case_insensitive_map_t<duckdb::unique_ptr<duckdb::CatalogEntry>> cached_tables_;
+	bool schema_loaded_ = false;
 };
 
 } // namespace openduck

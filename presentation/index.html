@@ -1,0 +1,1657 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OpenDuck — Remote DuckDB databases with dual execution and differential storage</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ─────────────────────────────────────────────────────────────
+       Design system
+       ───────────────────────────────────────────────────────────── */
+    :root {
+      --bg:        #07091a;
+      --bg-2:      #0d1230;
+      --surface:   #121935;
+      --surface-2: #1a2347;
+      --border:    #243056;
+      --text:      #f7f8fc;
+      --muted:     #8a93b6;
+      --dim:       #5d6796;
+
+      --gold:      #fbbf24;
+      --gold-2:    #f59e0b;
+      --orange:    #fb923c;
+      --emerald:   #34d399;
+      --emerald-2: #10b981;
+      --blue:      #60a5fa;
+      --blue-2:    #3b82f6;
+      --violet:    #a78bfa;
+      --violet-2:  #8b5cf6;
+      --pink:      #f472b6;
+
+      --r-sm: 6px;
+      --r:    12px;
+      --r-lg: 22px;
+
+      --shadow:   0 20px 60px -20px rgba(0,0,0,.6), 0 8px 24px -8px rgba(0,0,0,.5);
+      --inset:    inset 0 1px 0 rgba(255,255,255,.04);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      font-feature-settings: "ss01","cv11";
+      -webkit-font-smoothing: antialiased; }
+    body {
+      overflow: hidden;
+      background:
+        radial-gradient(1200px 700px at 80% -10%, rgba(251,191,36,.07), transparent 60%),
+        radial-gradient(1000px 700px at -10% 110%, rgba(96,165,250,.08), transparent 60%),
+        linear-gradient(180deg, #06081a 0%, #07091e 100%);
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       Slide stage (16:9, scales to viewport)
+       ───────────────────────────────────────────────────────────── */
+    .stage {
+      position: fixed; inset: 0;
+      display: grid; place-items: center;
+      perspective: 1400px;
+    }
+    .deck {
+      position: relative;
+      width: 1600px; height: 900px;
+      transform-origin: center;
+    }
+    .slide {
+      position: absolute; inset: 0;
+      padding: 72px 96px;
+      display: none;
+      flex-direction: column;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.012), rgba(0,0,0,0)),
+        linear-gradient(180deg, #0a0f24 0%, #07091e 100%);
+      border-top: 1px solid rgba(255,255,255,.04);
+    }
+    .slide.active { display: flex; animation: fadeIn .35s ease both; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       Chrome (progress bar, counter, hint)
+       ───────────────────────────────────────────────────────────── */
+    .chrome-top {
+      position: fixed; top: 0; left: 0; right: 0; height: 3px;
+      background: rgba(255,255,255,.04); z-index: 50;
+    }
+    .chrome-top .bar {
+      height: 100%; width: 0;
+      background: linear-gradient(90deg, var(--gold), var(--orange));
+      transition: width .25s ease;
+      box-shadow: 0 0 18px rgba(251,191,36,.6);
+    }
+    .chrome-bottom {
+      position: fixed; bottom: 18px; right: 24px; z-index: 50;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      color: var(--dim);
+      letter-spacing: .04em;
+    }
+    .chrome-bottom kbd {
+      display: inline-block; padding: 2px 7px; margin-left: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--muted); font-size: 11px;
+    }
+    .chrome-brand {
+      position: fixed; bottom: 18px; left: 24px; z-index: 50;
+      font-size: 12px; color: var(--dim);
+      letter-spacing: .12em; text-transform: uppercase;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .chrome-brand .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--gold); box-shadow: 0 0 14px var(--gold);
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       Type
+       ───────────────────────────────────────────────────────────── */
+    .eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--gold); margin-bottom: 18px;
+    }
+    h1.title {
+      font-size: 84px; font-weight: 800; line-height: 1.02;
+      letter-spacing: -.03em; margin: 0;
+    }
+    h1.mega {
+      font-size: 144px; font-weight: 900; line-height: .95;
+      letter-spacing: -.045em; margin: 0;
+    }
+    h2.title {
+      font-size: 56px; font-weight: 800; line-height: 1.05;
+      letter-spacing: -.02em; margin: 0 0 24px;
+    }
+    h3 { font-size: 22px; font-weight: 700; margin: 0 0 8px; letter-spacing: -.01em; }
+    p.lead { font-size: 26px; line-height: 1.45; color: var(--muted); max-width: 1100px; margin: 0; }
+    p.body { font-size: 18px; line-height: 1.6; color: var(--muted); margin: 0; }
+    .accent { color: var(--gold); }
+    .accent-emerald { color: var(--emerald); }
+    .accent-blue   { color: var(--blue); }
+    .accent-violet { color: var(--violet); }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+
+    /* ─────────────────────────────────────────────────────────────
+       Components
+       ───────────────────────────────────────────────────────────── */
+    .row { display: flex; gap: 24px; }
+    .col { display: flex; flex-direction: column; gap: 24px; }
+    .grow { flex: 1; }
+    .slide.center { justify-content: center; align-items: center; text-align: center; }
+
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0)) , var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 26px 28px;
+      box-shadow: var(--shadow), var(--inset);
+    }
+    .card .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      letter-spacing: .15em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 14px;
+    }
+    .card .badge .pill {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--gold); box-shadow: 0 0 10px currentColor;
+    }
+    .card.gold .badge { color: var(--gold); }
+    .card.emerald .badge { color: var(--emerald); }
+    .card.emerald .badge .pill { background: var(--emerald); }
+    .card.blue .badge { color: var(--blue); }
+    .card.blue .badge .pill { background: var(--blue); }
+    .card.violet .badge { color: var(--violet); }
+    .card.violet .badge .pill { background: var(--violet); }
+    .card h3 { font-size: 22px; color: var(--text); margin-bottom: 10px; }
+    .card p { font-size: 16px; line-height: 1.55; color: var(--muted); margin: 0; }
+
+    .pill-tag {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 14px; border-radius: 999px;
+      background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25);
+      color: var(--gold); font-size: 12px; font-family: 'JetBrains Mono', monospace;
+      letter-spacing: .1em; text-transform: uppercase;
+    }
+    .pill-tag.emerald { background: rgba(52,211,153,.08); border-color: rgba(52,211,153,.25); color: var(--emerald); }
+    .pill-tag.blue    { background: rgba(96,165,250,.08); border-color: rgba(96,165,250,.25); color: var(--blue); }
+    .pill-tag.violet  { background: rgba(167,139,250,.08); border-color: rgba(167,139,250,.25); color: var(--violet); }
+
+    /* Code blocks */
+    pre.code {
+      margin: 0;
+      background: #0a0d22;
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 22px 26px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 16px; line-height: 1.6;
+      color: #e2e8f0;
+      overflow: hidden;
+      box-shadow: var(--inset);
+    }
+    pre.code .c-key   { color: #f59e0b; }
+    pre.code .c-fn    { color: #60a5fa; }
+    pre.code .c-str   { color: #34d399; }
+    pre.code .c-num   { color: #f472b6; }
+    pre.code .c-com   { color: #5d6796; font-style: italic; }
+    pre.code .c-tbl   { color: #a78bfa; }
+    pre.code .c-ann   { color: #f472b6; font-weight: 600; }
+
+    .terminal {
+      background: #060818;
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .terminal .tbar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; background: #0c1130;
+      border-bottom: 1px solid var(--border);
+    }
+    .terminal .tbar .d {
+      width: 12px; height: 12px; border-radius: 50%; background: #3b3f59;
+    }
+    .terminal .tbar .d.r { background: #ef4444aa; }
+    .terminal .tbar .d.y { background: #f59e0baa; }
+    .terminal .tbar .d.g { background: #34d399aa; }
+    .terminal .tbar .label {
+      margin-left: 12px; font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; color: var(--dim);
+    }
+    .terminal pre {
+      margin: 0; padding: 18px 22px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 15px; line-height: 1.6;
+      color: #e2e8f0;
+    }
+    .terminal pre .prompt { color: var(--gold); }
+    .terminal pre .ok     { color: var(--emerald); }
+    .terminal pre .info   { color: var(--blue); }
+    .terminal pre .com    { color: var(--dim); font-style: italic; }
+
+    /* SVG Diagrams */
+    .diagram {
+      flex: 1;
+      min-height: 0;
+      display: grid; place-items: center;
+    }
+    .diagram svg {
+      width: 100%; height: 100%; max-height: 100%;
+      filter: drop-shadow(0 18px 40px rgba(0,0,0,.4));
+    }
+    text { fill: var(--text); font-family: 'Inter', sans-serif; }
+    .lbl-mono { font-family: 'JetBrains Mono', monospace; }
+
+    /* Cover slide bits */
+    .cover {
+      align-items: flex-start; justify-content: center;
+    }
+    .cover-mark {
+      display: flex; align-items: center; gap: 22px;
+      margin-bottom: 36px;
+    }
+    .cover-mark .duck {
+      width: 88px; height: 88px;
+    }
+    .cover h1 {
+      font-size: 168px; font-weight: 900; letter-spacing: -.05em;
+      line-height: .9; margin: 0;
+      background: linear-gradient(180deg, #ffffff 0%, #c5cce8 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .cover h1 .od-of { color: var(--gold); -webkit-text-fill-color: var(--gold); }
+    .cover .tag {
+      margin-top: 32px;
+      font-size: 32px; color: var(--muted); max-width: 1100px;
+      line-height: 1.4; letter-spacing: -.01em;
+    }
+    .cover .meta {
+      position: absolute; bottom: 80px; left: 96px; right: 96px;
+      display: flex; justify-content: space-between; align-items: center;
+      color: var(--dim); font-family: 'JetBrains Mono', monospace; font-size: 14px;
+      letter-spacing: .1em; text-transform: uppercase;
+    }
+
+    /* The "promise" slide */
+    .promise-line {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 56px; line-height: 1.3; letter-spacing: -.01em;
+      color: var(--text);
+      max-width: 1300px;
+    }
+    .promise-line .p-key { color: var(--gold); }
+    .promise-line .p-str { color: var(--emerald); }
+    .promise-line .p-fn  { color: var(--blue); }
+
+    /* Pillars */
+    .pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+
+    /* Step list */
+    ol.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+    ol.steps li {
+      counter-increment: s;
+      display: grid; grid-template-columns: 56px 1fr; gap: 22px;
+      padding: 16px 0; border-bottom: 1px dashed var(--border);
+    }
+    ol.steps li:last-child { border-bottom: none; }
+    ol.steps li::before {
+      content: counter(s);
+      width: 44px; height: 44px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--gold), var(--orange));
+      color: #1a1300; font-weight: 800; font-size: 18px;
+      display: grid; place-items: center;
+      box-shadow: 0 8px 18px -8px rgba(251,191,36,.6);
+    }
+    ol.steps li h3 { color: var(--text); font-size: 20px; margin-bottom: 4px; }
+    ol.steps li p  { color: var(--muted); font-size: 16px; line-height: 1.55; margin: 0; }
+
+    /* KV table for "vs" slides */
+    table.cmp { width: 100%; border-collapse: collapse; }
+    table.cmp th, table.cmp td {
+      text-align: left; padding: 14px 18px; vertical-align: top;
+    }
+    table.cmp thead th {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--muted); border-bottom: 1px solid var(--border);
+    }
+    table.cmp tbody tr { border-bottom: 1px solid rgba(36, 48, 86, .5); }
+    table.cmp tbody td:first-child { color: var(--muted); width: 32%; font-size: 15px; }
+    table.cmp tbody td { color: var(--text); font-size: 16px; line-height: 1.5; }
+
+    /* Speaker notes (toggle with N) */
+    .notes {
+      position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%);
+      width: min(960px, 90vw); max-height: 240px; overflow: auto;
+      background: rgba(8,10,28,.96);
+      border: 1px solid var(--border); border-radius: 14px;
+      padding: 18px 22px; color: var(--muted);
+      font-size: 14px; line-height: 1.55;
+      backdrop-filter: blur(10px);
+      box-shadow: var(--shadow);
+      display: none; z-index: 60;
+    }
+    .notes.show { display: block; }
+    .notes h4 {
+      margin: 0 0 8px; color: var(--gold); font-size: 12px;
+      font-family: 'JetBrains Mono', monospace; letter-spacing: .15em; text-transform: uppercase;
+    }
+
+    /* Click hint nav arrows */
+    .nav-arrow {
+      position: fixed; top: 50%; transform: translateY(-50%);
+      width: 56px; height: 56px; border-radius: 50%;
+      background: rgba(255,255,255,.04); border: 1px solid var(--border);
+      color: var(--muted); display: grid; place-items: center;
+      cursor: pointer; user-select: none;
+      transition: all .2s ease;
+      z-index: 40;
+    }
+    .nav-arrow:hover { background: rgba(255,255,255,.08); color: var(--text); }
+    .nav-arrow.left  { left: 24px; }
+    .nav-arrow.right { right: 24px; }
+
+    /* Scaling — applied in JS */
+    .deck { transition: transform .15s ease-out; }
+  </style>
+</head>
+<body>
+  <div class="chrome-top"><div class="bar" id="progress"></div></div>
+  <div class="chrome-brand"><span class="dot"></span> OpenDuck · Distributed DuckDB</div>
+  <div class="chrome-bottom">
+    <span id="counter">01 / 22</span>
+    <kbd>←</kbd><kbd>→</kbd> nav · <kbd>F</kbd> fullscreen · <kbd>N</kbd> notes
+  </div>
+  <div class="nav-arrow left"  id="prev">‹</div>
+  <div class="nav-arrow right" id="next">›</div>
+
+  <div class="stage">
+    <div class="deck" id="deck">
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 1 — Cover
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide active cover" data-notes="Hi, I'm going to walk you through OpenDuck — what it is, why I built it, how it works under the hood, and then a live demo. Goal: by the end of the talk you should be able to clone the repo and run a hybrid local+remote DuckDB query yourself.">
+        <div class="cover-mark">
+          <!-- Duck mark -->
+          <svg class="duck" viewBox="0 0 100 100" fill="none">
+            <defs>
+              <linearGradient id="dg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#fbbf24"/>
+                <stop offset="1" stop-color="#f97316"/>
+              </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="48" fill="url(#dg)"/>
+            <path d="M30 56 Q34 38 52 38 Q68 38 70 50 L82 50 Q78 64 64 66 Q60 75 48 75 Q30 75 30 56 Z"
+                  fill="#0a0d22"/>
+            <circle cx="58" cy="48" r="3" fill="#fbbf24"/>
+            <path d="M82 48 L92 46 L88 54 Z" fill="#fb923c"/>
+          </svg>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:18px; color:var(--muted); letter-spacing:.2em; text-transform:uppercase">Open · Source · DuckDB · Cloud</span>
+        </div>
+        <h1>Open<span class="od-of">Duck</span></h1>
+        <div class="tag">Remote DuckDB databases with dual execution and differential storage </div>
+
+        <div class="meta">
+          <div>Toby Oyetoke · v0.1 · MIT licensed · github.com/CITGuru/openduck</div>
+          <div>A talk for builders</div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 2 — About me
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Quick intro before we dive in. I'm Toby — I split my time between Bitpowr, where I'm building, and Finic, a YC company where I'm a founding engineer. OpenDuck is a side project I've been building because the architectural ideas in MotherDuck were too interesting to leave closed-source. Now: the talk.">
+        <div class="eyebrow">About me</div>
+        <div style="flex:1; display:flex; flex-direction:column; justify-content:center; gap: 38px;">
+          <div>
+            <h1 style="font-size: 110px; font-weight: 900; letter-spacing: -.04em; line-height: .95; margin: 0;
+                       background: linear-gradient(180deg, #ffffff 0%, #c5cce8 100%);
+                       -webkit-background-clip: text; background-clip: text; color: transparent;">
+              Toby Oyetoke
+            </h1>
+            <div style="margin-top: 18px; font-size: 26px; color: var(--muted); letter-spacing: -.005em;">
+              Entrepreneur · Founding Engineer
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+            <div class="card gold">
+              <div class="badge"><span class="pill"></span>Bitpowr</div>
+              <h3 style="font-size: 24px;">Founded</h3>
+              <p>Backed by <strong style="color:var(--text)">500 Global</strong>. Critical infrastructure to power the future of finance and AI </p>
+            </div>
+            <div class="card emerald">
+              <div class="badge"><span class="pill"></span>Finic</div>
+              <h3 style="font-size: 24px;">Founding Engineer</h3>
+              <p>Backed by <strong style="color:var(--text)">Y Combinator</strong>. Zero-day fraud detection</p>
+            </div>
+          </div>
+
+          <p class="body" style="font-size: 16px; color: var(--dim); margin-top: 4px;">
+            OpenDuck is a side project — the MotherDuck ideas were too interesting to leave closed-source.
+          </p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 3 — The promise
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="The whole pitch in one line of SQL. ATTACH a remote OpenDuck database. Now you can SELECT from it like it's local. JOIN it with local tables. Same DuckDB optimizer. The complexity lives behind that single string.">
+        <div class="eyebrow">The pitch · in one line of SQL</div>
+        <div style="flex:1; display:flex; flex-direction:column; justify-content:center; gap: 48px;">
+          <div class="promise-line">
+            <span class="p-key">ATTACH</span> <span class="p-str">'openduck:mydb'</span> <span class="p-key">AS</span> cloud<span style="color:var(--muted)">;</span>
+            <br>
+            <span class="p-key">SELECT</span> * <span class="p-key">FROM</span> cloud.users <span class="p-key">JOIN</span> local.events <span class="p-key">USING</span>(id)<span style="color:var(--muted)">;</span>
+          </div>
+          <p class="lead" style="max-width:1300px">
+            One <span class="accent">ATTACH</span>. One <span class="accent-emerald">JOIN</span>. The DuckDB optimizer plans across both sides; only the intermediate results cross the wire.
+          </p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 3 — Agenda
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Here's the road. Five stops. We'll spend most of our time in the architecture and the demo. Save big questions for the end — there'll be time.">
+        <div class="eyebrow">Agenda · ~30 min</div>
+        <h2 class="title">What we'll cover</h2>
+        <ol class="steps" style="margin-top: 12px;">
+          <li><div><h3>The challenge</h3><p>Why DuckDB-in-the-cloud is hard, and why a thin wrapper isn't enough.</p></div></li>
+          <li><div><h3>The architecture</h3><p>Client extension, gateway, workers, and the storage layer underneath.</p></div></li>
+          <li><div><h3>The three pillars</h3><p>Differential storage. Hybrid execution. Open protocol.</p></div></li>
+          <li><div><h3>Live demo</h3><p>Start the stack, attach a database, run a hybrid join, time-travel a snapshot.</p></div></li>
+          <li><div><h3>Lessons &amp; what's next</h3><p>Engineering trade-offs, security potholes, and the roadmap.</p></div></li>
+        </ol>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 4 — The challenge  (technical wall: DuckDB is brilliantly local)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="DuckDB was designed as an in-process analytical database. Single file, single process. That's its superpower. But cloud needs concurrent readers, durable storage in object stores, and the ability to share compute. So you can't just stick a network socket on it and call it done.">
+        <div class="eyebrow">The challenge</div>
+        <h2 class="title">DuckDB is brilliant — and brilliantly local.</h2>
+        <div class="row" style="margin-top: 36px; gap: 32px;">
+          <div class="col grow" style="gap: 18px;">
+            <div class="card">
+              <div class="badge"><span class="pill" style="background:#ef4444"></span>Storage</div>
+              <h3>One process owns the file</h3>
+              <p>The <span class="mono accent">.duckdb</span> file is a single mutable artifact. Multiple writers? Not really. Read-after-write consistency across machines? You're on your own.</p>
+            </div>
+            <div class="card">
+              <div class="badge"><span class="pill" style="background:#ef4444"></span>Catalog</div>
+              <h3>Catalog is in-process</h3>
+              <p>Tables, schemas, types — all live inside the running DuckDB instance. There's no network catalog you can attach to.</p>
+            </div>
+          </div>
+          <div class="col grow" style="gap: 18px;">
+            <div class="card">
+              <div class="badge"><span class="pill" style="background:#ef4444"></span>Execution</div>
+              <h3>Compute can't roam</h3>
+              <p>Push a query into the cloud where the data is, get results back? Not without a protocol that DuckDB doesn't ship.</p>
+            </div>
+            <div class="card emerald">
+              <div class="badge"><span class="pill"></span>The opportunity</div>
+              <h3>DuckDB's extension API is real</h3>
+              <p><span class="mono accent-emerald">StorageExtension</span> + <span class="mono accent-emerald">Catalog</span> let us pretend to be a normal database — and do anything we want under the hood.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 5 — Why this exists  (the demand: why distributed DuckDB)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" hidden data-notes="Why does a distributed, dual-execution, snapshotted DuckDB even need to exist? Three real problems. (1) Data outgrows the laptop — production data lives in S3, in warehouses, in another cloud. Round-tripping it to a local file to use DuckDB is wasteful. (2) Teams need to share one truth — a single .duckdb file isn't safe for concurrent writers, doesn't support shared snapshots, and breaks down the moment more than one person touches it. (3) The best query is hybrid — small dimensions on your laptop, big facts in the cloud, one optimizer planning across both. None of those are problems a thin REST wrapper around DuckDB solves.">
+        <div class="eyebrow">Why this exists</div>
+        <h2 class="title">DuckDB is local.<br/><span style="color:var(--muted); font-weight:600">Your data, your team, your workloads aren't always.</span></h2>
+
+        <div class="row" style="margin-top: 32px; gap: 24px; flex: 1;">
+          <div class="card gold grow">
+            <div class="badge"><span class="pill"></span>1 · Data outgrew the laptop</div>
+            <h3>Production data isn't on your machine</h3>
+            <p>It's in S3, in a warehouse, in another cloud, in a partner system. Round-tripping it to a local <span class="mono accent">.duckdb</span> file to query is slow, wasteful, and frequently impossible.</p>
+          </div>
+          <div class="card emerald grow">
+            <div class="badge"><span class="pill"></span>2 · Teams can't share a file</div>
+            <h3>One file, one writer</h3>
+            <p>A <span class="mono accent-emerald">.duckdb</span> file isn't safe for concurrent writers. There's no shared snapshot, no read-after-write across processes, no time travel. Collaboration falls back to ad-hoc copies.</p>
+          </div>
+          <div class="card blue grow">
+            <div class="badge"><span class="pill"></span>3 · The best query is hybrid</div>
+            <h3>Small here, big there</h3>
+            <p>Dimensions, lookups, dev data — fastest on your laptop. Fact tables, event logs, snapshots — best where they live. You want one query that uses both, planned by one optimizer.</p>
+          </div>
+        </div>
+
+        <p class="body" style="margin-top: 28px; color: var(--muted); font-size: 17px; max-width: 1300px;">
+          A remote, snapshotted, dual-execution DuckDB exists because a thin REST wrapper around <span class="mono">SELECT</span> doesn't solve any of these. You need a real catalog, a real plan splitter, and storage that handles multiple readers safely.
+        </p>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 6 — Where the ideas come from  (lineage / credit)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="MotherDuck shipped a brilliant cloud product and published the architectural ideas behind it: differential storage, dual execution, the attach-based UX. Those ideas are the most interesting thing to happen to DuckDB. I wanted to see them live in the open — open protocol, open backend, open extension. OpenDuck is not wire-compatible with MotherDuck. It re-implements the same architectural shape under MIT.">
+        <div class="eyebrow">Where the ideas come from</div>
+        <h2 class="title">MotherDuck pioneered the ideas.<br/><span style="color:var(--muted); font-weight:600">OpenDuck makes them open.</span></h2>
+        <div class="row" style="margin-top: 36px;">
+          <div class="card gold grow">
+            <div class="badge"><span class="pill"></span>The inspiration</div>
+            <p>MotherDuck showed DuckDB can work beautifully in the cloud — <span class="mono accent">md:mydb</span>, transparent attach, queries split between laptop and cloud, snapshot-based storage.</p>
+          </div>
+          <div class="card emerald grow">
+            <div class="badge"><span class="pill"></span>The gap</div>
+            <p>It's a closed commercial service. The protocol is private, the backend is theirs, and the extension is bundled into DuckDB.</p>
+          </div>
+          <div class="card blue grow">
+            <div class="badge"><span class="pill"></span>OpenDuck</div>
+            <p>An open re-implementation: open gRPC + Arrow protocol, swappable backend, separate loadable extension you can build &amp; modify.</p>
+          </div>
+        </div>
+        <p class="body" style="margin-top:36px; color: var(--dim); font-size: 14px;">
+          Not wire-compatible with MotherDuck — same architectural shape, MIT-licensed implementation.
+        </p>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 7 — Architecture (BIG diagram)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="One picture, the whole system. Top: the client — your laptop running DuckDB with the openduck extension loaded. The extension exposes an OpenDuckCatalog so remote tables look like local catalog entries. It talks gRPC to a gateway. The gateway is the brain — auth, worker registry, affinity routing, plan splitting. Workers are stateless DuckDB processes that execute query fragments. Storage is split: Postgres holds metadata (snapshots, layer manifests), and an object store holds the sealed layer files.">
+        <div class="eyebrow">System architecture</div>
+        <h2 class="title" style="margin-bottom: 14px;">From <span class="accent">ATTACH</span> to bytes — the whole picture</h2>
+
+        <div class="diagram">
+          <svg viewBox="0 0 1400 660" preserveAspectRatio="xMidYMid meet">
+            <defs>
+              <linearGradient id="gold-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#fcd34d"/><stop offset="1" stop-color="#f59e0b"/>
+              </linearGradient>
+              <linearGradient id="emerald-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#6ee7b7"/><stop offset="1" stop-color="#10b981"/>
+              </linearGradient>
+              <linearGradient id="blue-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#93c5fd"/><stop offset="1" stop-color="#3b82f6"/>
+              </linearGradient>
+              <linearGradient id="violet-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#c4b5fd"/><stop offset="1" stop-color="#8b5cf6"/>
+              </linearGradient>
+              <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#8a93b6"/>
+              </marker>
+              <marker id="arr-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/>
+              </marker>
+            </defs>
+
+            <!-- CLIENT -->
+            <g>
+              <rect x="80"  y="40" width="500" height="200" rx="20" fill="#0e1430" stroke="#243056"/>
+              <text x="100" y="72" font-size="13" font-family="'JetBrains Mono'" fill="#fbbf24" letter-spacing="2">CLIENT · DUCKDB PROCESS</text>
+              <text x="100" y="102" font-size="22" font-weight="700">Your laptop, notebook, server</text>
+              <rect x="100" y="124" width="460" height="96" rx="14" fill="#121935" stroke="#2c3a6b"/>
+              <text x="120" y="152" font-size="13" font-family="'JetBrains Mono'" fill="#a78bfa" letter-spacing="1.5">OPENDUCK EXTENSION</text>
+              <text x="120" y="178" font-size="15" font-family="'JetBrains Mono'" fill="#e2e8f0">OpenDuckCatalog · OpenDuckSchemaEntry</text>
+              <text x="120" y="200" font-size="15" font-family="'JetBrains Mono'" fill="#e2e8f0">OpenDuckTableEntry · ScanFunction</text>
+            </g>
+
+            <!-- arrow client -> gateway -->
+            <path d="M 330 240 L 330 300" stroke="#fbbf24" stroke-width="2.5" stroke-dasharray="6 6" marker-end="url(#arr-gold)"/>
+            <text x="345" y="278" font-size="13" font-family="'JetBrains Mono'" fill="#fbbf24">gRPC + Arrow IPC</text>
+
+            <!-- GATEWAY -->
+            <g>
+              <rect x="80" y="300" width="500" height="220" rx="20" fill="url(#gold-grad)" opacity=".08" stroke="#fbbf24" stroke-opacity=".5"/>
+              <text x="100" y="332" font-size="13" font-family="'JetBrains Mono'" fill="#fbbf24" letter-spacing="2">GATEWAY · RUST · TONIC</text>
+              <text x="100" y="362" font-size="22" font-weight="700">The brain</text>
+              <g font-size="14" font-family="'Inter'" fill="#e2e8f0">
+                <text x="100" y="394">·  Token auth  (constant-time)</text>
+                <text x="100" y="418">·  Worker registry  +  heartbeat</text>
+                <text x="100" y="442">·  Affinity routing  (database, region)</text>
+                <text x="100" y="466">·  Hybrid plan splitting  +  bridge ops</text>
+                <text x="100" y="490">·  Backpressure  &amp;  cancellation</text>
+              </g>
+            </g>
+
+            <!-- arrow gateway -> workers -->
+            <path d="M 580 380 C 680 380 720 200 820 200" stroke="#8a93b6" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+            <path d="M 580 410 C 680 410 720 410 820 410" stroke="#8a93b6" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+            <path d="M 580 440 C 680 440 720 580 820 580" stroke="#8a93b6" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+
+            <!-- WORKERS -->
+            <g>
+              <rect x="820" y="140" width="320" height="120" rx="16" fill="#0e1430" stroke="url(#emerald-grad)"/>
+              <text x="840" y="172" font-size="12" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">WORKER 1 · DUCKDB</text>
+              <text x="840" y="200" font-size="16" font-weight="600">databases: [analytics]</text>
+              <text x="840" y="222" font-size="13" font-family="'JetBrains Mono'" fill="#94a3b8">RegisterWorker → Heartbeat</text>
+              <text x="840" y="244" font-size="13" font-family="'JetBrains Mono'" fill="#94a3b8">ExecuteFragment → Arrow IPC</text>
+
+              <rect x="820" y="350" width="320" height="120" rx="16" fill="#0e1430" stroke="url(#emerald-grad)"/>
+              <text x="840" y="382" font-size="12" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">WORKER 2 · DUCKDB</text>
+              <text x="840" y="410" font-size="16" font-weight="600">databases: [warehouse]</text>
+              <text x="840" y="432" font-size="13" font-family="'JetBrains Mono'" fill="#94a3b8">compute_context: us-east-1</text>
+              <text x="840" y="454" font-size="13" font-family="'JetBrains Mono'" fill="#94a3b8">max_concurrency: 8</text>
+
+              <rect x="820" y="520" width="320" height="100" rx="16" fill="#0e1430" stroke="url(#emerald-grad)" stroke-dasharray="4 4"/>
+              <text x="840" y="552" font-size="12" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">WORKER N</text>
+              <text x="840" y="582" font-size="14" fill="#8a93b6">Add capacity. Add affinity.</text>
+              <text x="840" y="604" font-size="14" fill="#8a93b6">Re-register, traffic flows.</text>
+            </g>
+
+            <!-- arrow workers -> storage -->
+            <path d="M 980 470 L 980 540" stroke="#8a93b6" stroke-width="2" fill="none" marker-end="url(#arr)" opacity=".0"/>
+
+            <!-- STORAGE -->
+            <g>
+              <rect x="1180" y="140" width="190" height="200" rx="16" fill="#0e1430" stroke="url(#blue-grad)"/>
+              <text x="1200" y="172" font-size="12" font-family="'JetBrains Mono'" fill="#60a5fa" letter-spacing="2">METADATA</text>
+              <text x="1200" y="202" font-size="20" font-weight="700">Postgres</text>
+              <text x="1200" y="232" font-size="13" fill="#8a93b6">·  Layers</text>
+              <text x="1200" y="252" font-size="13" fill="#8a93b6">·  Snapshots</text>
+              <text x="1200" y="272" font-size="13" fill="#8a93b6">·  Manifests</text>
+              <text x="1200" y="292" font-size="13" fill="#8a93b6">·  Live ingest TX</text>
+
+              <rect x="1180" y="370" width="190" height="200" rx="16" fill="#0e1430" stroke="url(#violet-grad)"/>
+              <text x="1200" y="402" font-size="12" font-family="'JetBrains Mono'" fill="#a78bfa" letter-spacing="2">DATA</text>
+              <text x="1200" y="432" font-size="20" font-weight="700">Object store</text>
+              <text x="1200" y="462" font-size="13" fill="#8a93b6">·  Sealed layers</text>
+              <text x="1200" y="482" font-size="13" fill="#8a93b6">·  Append-only</text>
+              <text x="1200" y="502" font-size="13" fill="#8a93b6">·  Immutable, content-</text>
+              <text x="1200" y="520" font-size="13" fill="#8a93b6">   addressable</text>
+              <text x="1200" y="552" font-size="13" fill="#8a93b6">·  S3 / R2 / MinIO</text>
+            </g>
+
+            <!-- worker -> storage arrows -->
+            <path d="M 1140 200 L 1180 200" stroke="#60a5fa" stroke-width="2" marker-end="url(#arr)"/>
+            <path d="M 1140 410 L 1180 470" stroke="#a78bfa" stroke-width="2" marker-end="url(#arr)"/>
+          </svg>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 7 — Pillar 1: Differential storage
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Pillar one. DuckDB sees a normal file. Underneath, OpenDuck appends sealed layers — immutable chunks of data. Postgres tracks the manifest: which layers belong to which snapshot. New writes don't mutate; they add a layer. Snapshots are just lists of layer IDs. Time travel for free. Concurrent readers because nothing's locked.">
+        <div class="eyebrow">Pillar 1 · Differential storage</div>
+        <h2 class="title">Append-only sealed layers.<br/><span style="color:var(--muted); font-weight:600">One serialized writer. Many concurrent readers.</span></h2>
+
+        <div class="row" style="margin-top: 28px; gap: 36px; flex: 1;">
+          <div class="col" style="flex: 1.1; gap: 18px; justify-content: center;">
+            <div class="card violet">
+              <div class="badge"><span class="pill"></span>Layers</div>
+              <p>Every write becomes a sealed, immutable file in object storage. Layers are content-addressable and never rewritten.</p>
+            </div>
+            <div class="card blue">
+              <div class="badge"><span class="pill"></span>Snapshots</div>
+              <p>A snapshot is a manifest in Postgres — a list of layer IDs. Read at any snapshot to get a consistent view. Time travel comes for free.</p>
+            </div>
+            <div class="card emerald">
+              <div class="badge"><span class="pill"></span>Concurrency</div>
+              <p>Readers never block. A new writer creates a new snapshot; old readers continue against their own. No locks on hot paths.</p>
+            </div>
+          </div>
+
+          <div class="diagram" style="flex: 1.4;">
+            <svg viewBox="0 0 700 520">
+              <defs>
+                <linearGradient id="lyr-grad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#8b5cf6"/>
+                </linearGradient>
+              </defs>
+
+              <!-- timeline axis -->
+              <text x="20" y="36" font-size="13" font-family="'JetBrains Mono'" fill="#8a93b6" letter-spacing="2">TIME →</text>
+              <line x1="20" y1="50" x2="680" y2="50" stroke="#243056" stroke-width="1"/>
+
+              <!-- layers -->
+              <g>
+                <rect x="40"  y="80" width="120" height="60" rx="10" fill="#1a2347" stroke="url(#lyr-grad)"/>
+                <text x="100" y="116" text-anchor="middle" font-size="14" font-family="'JetBrains Mono'" fill="#c4b5fd">L1 · 4MB</text>
+
+                <rect x="170" y="80" width="120" height="60" rx="10" fill="#1a2347" stroke="url(#lyr-grad)"/>
+                <text x="230" y="116" text-anchor="middle" font-size="14" font-family="'JetBrains Mono'" fill="#c4b5fd">L2 · 8MB</text>
+
+                <rect x="300" y="80" width="120" height="60" rx="10" fill="#1a2347" stroke="url(#lyr-grad)"/>
+                <text x="360" y="116" text-anchor="middle" font-size="14" font-family="'JetBrains Mono'" fill="#c4b5fd">L3 · 12MB</text>
+
+                <rect x="430" y="80" width="120" height="60" rx="10" fill="#1a2347" stroke="url(#lyr-grad)"/>
+                <text x="490" y="116" text-anchor="middle" font-size="14" font-family="'JetBrains Mono'" fill="#c4b5fd">L4 · 6MB</text>
+
+                <rect x="560" y="80" width="120" height="60" rx="10" fill="#1a2347" stroke="url(#lyr-grad)" stroke-dasharray="4 4"/>
+                <text x="620" y="116" text-anchor="middle" font-size="14" font-family="'JetBrains Mono'" fill="#a78bfa" opacity=".7">L5 · open</text>
+              </g>
+
+              <!-- snapshots -->
+              <text x="20" y="220" font-size="13" font-family="'JetBrains Mono'" fill="#60a5fa" letter-spacing="2">SNAPSHOTS</text>
+
+              <g>
+                <rect x="40" y="240" width="220" height="50" rx="10" fill="#0e1430" stroke="#3b82f6"/>
+                <text x="60" y="262" font-size="12" font-family="'JetBrains Mono'" fill="#60a5fa">snap_1</text>
+                <text x="60" y="282" font-size="13" font-family="'JetBrains Mono'" fill="#e2e8f0">{ L1, L2 }</text>
+
+                <rect x="40" y="305" width="320" height="50" rx="10" fill="#0e1430" stroke="#3b82f6"/>
+                <text x="60" y="327" font-size="12" font-family="'JetBrains Mono'" fill="#60a5fa">snap_2</text>
+                <text x="60" y="347" font-size="13" font-family="'JetBrains Mono'" fill="#e2e8f0">{ L1, L2, L3 }</text>
+
+                <rect x="40" y="370" width="430" height="50" rx="10" fill="#0e1430" stroke="#3b82f6"/>
+                <text x="60" y="392" font-size="12" font-family="'JetBrains Mono'" fill="#60a5fa">snap_3 (current)</text>
+                <text x="60" y="412" font-size="13" font-family="'JetBrains Mono'" fill="#e2e8f0">{ L1, L2, L3, L4 }</text>
+              </g>
+
+              <text x="20" y="470" font-size="13" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">READERS</text>
+              <text x="20" y="495" font-size="14" fill="#cbd5e1">Reader A → snap_2  ·  Reader B → snap_3  ·  Writer → builds L5</text>
+            </svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 7b — Pillar 1: the *differential* part (extent overlay)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Now the part the previous slide hand-waved. Why call it *differential* storage and not just *append-only* storage? Because layers don't just add new data — within a layer, a write at the same logical address as an earlier extent SHADOWS it on read. So a snapshot isn't just 'these layers in this order' — it's 'walk extents newest-first, take the first match'. That's the overlay semantics. In the diagram: Layer 1 wrote extent A covering bytes 0..400. Later, Layer 2 wrote extent C covering bytes 200..400 — overlapping the second half of A. A reader at byte 300 walks extents newest-first, finds C, returns C. The bytes in A from 200..400 still exist on disk; they're just shadowed. This is exactly what the read_byte function in diff-core/src/memory.rs does — iter().rev() walks newest-first, first match wins.">
+        <div class="eyebrow">Pillar 1 · The <em>differential</em> part</div>
+        <h2 class="title" style="margin-bottom: 12px;">Newer extents shadow older ones at the same address.</h2>
+        <p class="lead" style="font-size: 20px; color: var(--muted); max-width: 1300px;">
+          Layers don't just <em>add</em> data — they <em>overlay</em> it. A read walks extents newest-first; first match wins. That's why it's "differential", not just "append-only".
+        </p>
+
+        <div class="row" style="margin-top: 24px; gap: 32px; flex: 1; min-height: 0;">
+          <div class="diagram" style="flex: 1.5;">
+            <svg viewBox="0 0 700 460" preserveAspectRatio="xMidYMid meet">
+              <defs>
+                <linearGradient id="ext-blue" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#3b82f6"/>
+                </linearGradient>
+                <linearGradient id="ext-red" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#f87171"/><stop offset="1" stop-color="#ef4444"/>
+                </linearGradient>
+                <linearGradient id="ext-violet" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#c4b5fd"/><stop offset="1" stop-color="#8b5cf6"/>
+                </linearGradient>
+                <marker id="arr-down" viewBox="0 0 10 10" refX="5" refY="9" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,0 L5,10 z" fill="#fbbf24"/>
+                </marker>
+              </defs>
+
+              <!-- ── Address ruler ─────────────────────────────── -->
+              <text x="20" y="22" font-size="12" font-family="'JetBrains Mono'" fill="#8a93b6" letter-spacing="2">LOGICAL ADDRESS</text>
+              <line x1="40" y1="44" x2="640" y2="44" stroke="#3b4670" stroke-width="1"/>
+              <g font-size="11" font-family="'JetBrains Mono'" fill="#8a93b6">
+                <line x1="40"  y1="40" x2="40"  y2="48" stroke="#3b4670"/>
+                <line x1="160" y1="40" x2="160" y2="48" stroke="#3b4670"/>
+                <line x1="280" y1="40" x2="280" y2="48" stroke="#3b4670"/>
+                <line x1="400" y1="40" x2="400" y2="48" stroke="#3b4670"/>
+                <line x1="520" y1="40" x2="520" y2="48" stroke="#3b4670"/>
+                <line x1="640" y1="40" x2="640" y2="48" stroke="#3b4670"/>
+                <text x="40"  y="64" text-anchor="middle">0</text>
+                <text x="160" y="64" text-anchor="middle">200</text>
+                <text x="280" y="64" text-anchor="middle">400</text>
+                <text x="400" y="64" text-anchor="middle">600</text>
+                <text x="520" y="64" text-anchor="middle">800</text>
+                <text x="640" y="64" text-anchor="middle">1000</text>
+              </g>
+
+              <!-- ── Layer 2 (newer) on top so the visual order matches search order ── -->
+              <text x="20" y="100" font-size="12" font-family="'JetBrains Mono'" fill="#a78bfa" letter-spacing="2">LAYER 2 · sealed later</text>
+              <rect x="160" y="112" width="135" height="44" rx="6" fill="url(#ext-violet)" stroke="#a78bfa"/>
+              <text x="228" y="139" text-anchor="middle" font-size="13" font-family="'JetBrains Mono'" fill="#0a0d22" font-weight="700">extent C · 200..400</text>
+
+              <!-- ── Layer 1 (older) ─────────────────────────────── -->
+              <text x="20" y="190" font-size="12" font-family="'JetBrains Mono'" fill="#60a5fa" letter-spacing="2">LAYER 1 · sealed earlier</text>
+              <rect x="40"  y="202" width="240" height="44" rx="6" fill="url(#ext-blue)" stroke="#60a5fa"/>
+              <text x="160" y="229" text-anchor="middle" font-size="13" font-family="'JetBrains Mono'" fill="#0a0d22" font-weight="700">extent A · 0..400</text>
+              <rect x="400" y="202" width="240" height="44" rx="6" fill="url(#ext-red)" stroke="#ef4444"/>
+              <text x="520" y="229" text-anchor="middle" font-size="13" font-family="'JetBrains Mono'" fill="#0a0d22" font-weight="700">extent B · 600..1000</text>
+
+              <!-- ── Read at addr 300 (sample read pointer) ─────── -->
+              <line x1="220" y1="78" x2="220" y2="105" stroke="#fbbf24" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arr-down)"/>
+              <text x="232" y="92" font-size="12" font-family="'JetBrains Mono'" fill="#fbbf24">read @ 300 → C wins</text>
+
+              <!-- ── Resolved view (what a reader sees) ─────────── -->
+              <text x="20" y="290" font-size="12" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">WHAT THE READER SEES</text>
+              <rect x="40"  y="302" width="120" height="44" rx="6" fill="url(#ext-blue)" stroke="#60a5fa"/>
+              <text x="100" y="329" text-anchor="middle" font-size="12" font-family="'JetBrains Mono'" fill="#0a0d22" font-weight="700">A · 0..200</text>
+              <rect x="160" y="302" width="120" height="44" rx="6" fill="url(#ext-violet)" stroke="#a78bfa"/>
+              <text x="220" y="329" text-anchor="middle" font-size="12" font-family="'JetBrains Mono'" fill="#0a0d22" font-weight="700">C · 200..400</text>
+              <rect x="280" y="302" width="120" height="44" rx="6" fill="#1a2347" stroke="#3b4670" stroke-dasharray="3 3"/>
+              <text x="340" y="329" text-anchor="middle" font-size="12" font-family="'JetBrains Mono'" fill="#5d6796">gap · 0x00</text>
+              <rect x="400" y="302" width="240" height="44" rx="6" fill="url(#ext-red)" stroke="#ef4444"/>
+              <text x="520" y="329" text-anchor="middle" font-size="12" font-family="'JetBrains Mono'" fill="#0a0d22" font-weight="700">B · 600..1000</text>
+
+              <!-- ── Hint annotation ───────────────────────────── -->
+              <text x="20" y="390" font-size="13" fill="#cbd5e1">
+                Bytes <tspan fill="#60a5fa" font-family="'JetBrains Mono'">A[200..400]</tspan>
+                are still on disk — they're <tspan fill="#fbbf24">shadowed</tspan>, not deleted.
+              </text>
+              <text x="20" y="412" font-size="13" fill="#8a93b6">
+                A snapshot bound caps the search to <tspan fill="#cbd5e1" font-family="'JetBrains Mono'">layer_index ≤ N</tspan>
+                — older snapshots literally cannot see C.
+              </text>
+            </svg>
+          </div>
+
+          <div class="col" style="flex: 1; gap: 16px; justify-content: center;">
+            <div class="card violet" style="padding: 18px 22px;">
+              <div class="badge" style="margin-bottom: 8px;"><span class="pill"></span>The read loop · <span class="mono">diff-core/src/memory.rs</span></div>
+<pre class="code" style="font-size:13px; padding: 14px 18px;"><span class="c-com">// newest extent at the same address wins</span>
+<span class="c-key">for</span> e <span class="c-key">in</span> inner.extents.iter().<span class="c-fn">rev</span>() {
+    <span class="c-key">if</span> offset &lt; e.logical_start
+       || offset &gt;= e.logical_start + e.length
+    { <span class="c-key">continue</span>; }
+    <span class="c-key">if</span> <span class="c-key">let</span> Some(ms) = max_sealed {
+        <span class="c-key">if</span> e.layer_index &gt; ms
+           || e.layer_index == ACTIVE
+        { <span class="c-key">continue</span>; }     <span class="c-com">// snapshot bound</span>
+    }
+    <span class="c-key">return</span> blob[e.phys_start + (offset - e.logical_start)];
+}</pre>
+            </div>
+
+            <div class="card emerald" style="padding: 16px 20px;">
+              <div class="badge" style="margin-bottom: 6px;"><span class="pill"></span>Three rules to remember</div>
+              <ul style="margin: 0; padding-left: 20px; color: var(--muted); font-size: 14px; line-height: 1.7;">
+                <li><strong style="color:var(--text)">Writes append</strong> — extents go into the active layer, never overwrite.</li>
+                <li><strong style="color:var(--text)">Reads scan newest-first</strong> — first matching extent wins.</li>
+                <li><strong style="color:var(--text)">Snapshots cap the search</strong> — bound the layer index, the past becomes immutable.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 8 — Pillar 2: Hybrid execution intro
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Pillar two: dual or hybrid execution. The simple version: a single SQL query can run partly on your laptop and partly on a remote worker. The hard part is getting the planner to label each operator local or remote, and bridging the boundary by streaming Arrow batches between them. Only intermediate results cross the wire — never the raw tables.">
+        <div class="eyebrow">Pillar 2 · Hybrid (dual) execution</div>
+        <h2 class="title">One query.<br/>Two engines. <span class="accent">No copy-and-paste.</span></h2>
+        <p class="lead" style="margin-top: 12px;">
+          The gateway splits the plan into <span class="accent-emerald">LOCAL</span> and <span class="accent-blue">REMOTE</span> fragments, runs each on the right engine, and inserts <span class="accent">Bridge</span> operators at the boundary. Only intermediate Arrow batches cross the wire.
+        </p>
+
+        <div class="diagram" style="margin-top: 36px;">
+          <svg viewBox="0 0 1200 480">
+            <defs>
+              <marker id="arrL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/>
+              </marker>
+              <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#60a5fa"/>
+              </marker>
+              <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/>
+              </marker>
+            </defs>
+
+            <!-- root -->
+            <g>
+              <rect x="450" y="20" width="300" height="70" rx="12" fill="#0e1430" stroke="#34d399" stroke-width="2"/>
+              <text x="468" y="48" font-size="13" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">[ LOCAL ]</text>
+              <text x="468" y="74" font-size="18" font-weight="700" fill="#e2e8f0">HashJoin  l.id = r.id</text>
+            </g>
+
+            <!-- left: local scan -->
+            <line x1="540" y1="90" x2="280" y2="170" stroke="#34d399" stroke-width="2" marker-end="url(#arrL)"/>
+            <g>
+              <rect x="120" y="180" width="280" height="70" rx="12" fill="#0e1430" stroke="#34d399"/>
+              <text x="140" y="208" font-size="13" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">[ LOCAL ]</text>
+              <text x="140" y="234" font-size="18" font-weight="700" fill="#e2e8f0">Scan  products  (laptop)</text>
+            </g>
+
+            <!-- right: bridge -->
+            <line x1="640" y1="90" x2="900" y2="170" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrG)"/>
+            <g>
+              <rect x="780" y="180" width="320" height="70" rx="12" fill="#1a1300" stroke="#fbbf24" stroke-width="2"/>
+              <text x="800" y="208" font-size="13" font-family="'JetBrains Mono'" fill="#fbbf24" letter-spacing="2">[ BRIDGE  R → L ]</text>
+              <text x="800" y="234" font-size="16" font-weight="700" fill="#fcd34d">Arrow IPC stream · materialize</text>
+            </g>
+
+            <!-- bridge -> remote scan -->
+            <line x1="940" y1="250" x2="940" y2="320" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrR)"/>
+            <g>
+              <rect x="780" y="330" width="320" height="70" rx="12" fill="#0e1430" stroke="#60a5fa" stroke-width="2"/>
+              <text x="800" y="358" font-size="13" font-family="'JetBrains Mono'" fill="#60a5fa" letter-spacing="2">[ REMOTE ]</text>
+              <text x="800" y="384" font-size="18" font-weight="700" fill="#e2e8f0">Scan  sales  (worker)</text>
+            </g>
+
+            <!-- legend -->
+            <g transform="translate(120, 410)">
+              <circle cx="6" cy="6" r="6" fill="#34d399"/>
+              <text x="22" y="10" font-size="14" fill="#cbd5e1" font-family="'JetBrains Mono'">LOCAL — runs on the client DuckDB</text>
+
+              <circle cx="6" cy="36" r="6" fill="#60a5fa"/>
+              <text x="22" y="40" font-size="14" fill="#cbd5e1" font-family="'JetBrains Mono'">REMOTE — runs on a worker</text>
+
+              <circle cx="406" cy="6" r="6" fill="#fbbf24"/>
+              <text x="422" y="10" font-size="14" fill="#cbd5e1" font-family="'JetBrains Mono'">BRIDGE — Arrow IPC across the wire</text>
+            </g>
+          </svg>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 9 — Hybrid: how the planner decides
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="So how does the planner decide what's local vs remote? Three mechanisms. Auto: use catalog metadata about which tables live where. Hint: openduck_run lets you force placement, like MotherDuck's md_run. Build-side preference: hash joins prefer the small side as build, which steers placement.">
+        <div class="eyebrow">How the planner decides</div>
+        <h2 class="title">Auto, hint, or build-side.</h2>
+
+        <div class="row" style="margin-top: 28px; gap: 28px; flex: 1;">
+          <div class="card emerald grow">
+            <div class="badge"><span class="pill"></span>1 · Auto</div>
+            <h3>Catalog tells the planner</h3>
+            <p style="margin-bottom:14px">Each <span class="mono accent-emerald">Scan</span> checks if the table is in the worker's <span class="mono">remote_tables</span> set. Other operators inherit placement from the majority of children.</p>
+<pre class="code" style="font-size:14px"><span class="c-com">// crates/exec-gateway/src/hybrid.rs</span>
+<span class="c-key">fn</span> <span class="c-fn">resolve_auto</span>(node: &amp;<span class="c-tbl">PlanNode</span>) -&gt; <span class="c-tbl">Placement</span> {
+    <span class="c-key">match</span> node {
+        Scan { table } =&gt; remote_tables
+            .contains(table).then_some(Remote)
+            .unwrap_or(Local),
+        _ =&gt; majority_of_children(node),
+    }
+}</pre>
+          </div>
+
+          <div class="card gold grow">
+            <div class="badge"><span class="pill"></span>2 · Hint (mirrors md_run)</div>
+            <h3>Force it with <span class="mono">openduck_run</span></h3>
+            <p style="margin-bottom:14px">Wrap a fragment with an explicit placement. The planner respects the hint and routes accordingly.</p>
+<pre class="code" style="font-size:14px"><span class="c-com">-- ship the heavy bit to the worker</span>
+<span class="c-key">SELECT</span> l.<span class="c-tbl">*</span>
+<span class="c-key">FROM</span> local_t l
+<span class="c-key">JOIN</span> <span class="c-fn">openduck_run</span>(<span class="c-str">'REMOTE'</span>,
+   <span class="c-str">'SELECT * FROM big_remote_t'</span>) r
+  <span class="c-key">ON</span> l.id = r.id;</pre>
+          </div>
+
+          <div class="card blue grow">
+            <div class="badge"><span class="pill"></span>3 · Build-side</div>
+            <h3>Small side wins</h3>
+            <p style="margin-bottom:14px">For hash joins the planner prefers the <em>smaller</em> input as the build side. Build placement biases the rest of the plan — small-local + big-remote becomes the default shape.</p>
+<pre class="code" style="font-size:14px"><span class="c-com">// chosen by row-count estimates</span>
+<span class="c-tbl">HashJoin</span>
+  ├─ <span class="c-ann">[BUILD]</span> Scan local.dim   <span class="c-com">// small</span>
+  └─ <span class="c-ann">[PROBE]</span> Scan remote.fact  <span class="c-com">// big</span></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 10 — Pillar 3: Open protocol (4 RPCs)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Pillar three. The protocol is small on purpose. Two data-plane RPCs: ExecuteFragment streams Arrow batches; CancelExecution kills a query. Two control-plane RPCs: RegisterWorker so the gateway knows you exist; Heartbeat so it knows you're still alive. Plus a thin transaction surface for live ingest. Why so small? Because Arrow is the wire format. Schemas, types, vector layout — Arrow handles all of that. The protocol stays out of the way.">
+        <div class="eyebrow">Pillar 3 · Open protocol</div>
+        <h2 class="title">Four RPCs.<br/><span style="color:var(--muted); font-weight:600">Arrow IPC does the heavy lifting.</span></h2>
+
+        <div class="row" style="gap: 28px; flex: 1;">
+          <div class="col grow" style="gap: 18px;">
+            <div class="card emerald">
+              <div class="badge"><span class="pill"></span>Data plane · 2 RPCs</div>
+<pre class="code" style="font-size:15px"><span class="c-key">rpc</span> <span class="c-fn">ExecuteFragment</span>(...)
+   <span class="c-key">returns</span> (<span class="c-key">stream</span> ExecuteFragmentChunk);
+
+<span class="c-key">rpc</span> <span class="c-fn">CancelExecution</span>(...)
+   <span class="c-key">returns</span> (CancelReply);</pre>
+              <p style="margin-top: 10px;">A plan fragment in, a stream of <span class="mono accent-emerald">ArrowIpcBatch</span> out. Cancellation is a single fire-and-ack RPC routed by execution_id.</p>
+            </div>
+
+            <div class="card blue">
+              <div class="badge"><span class="pill"></span>Control plane · 2 RPCs</div>
+<pre class="code" style="font-size:15px"><span class="c-key">rpc</span> <span class="c-fn">RegisterWorker</span>(WorkerRegistration)
+   <span class="c-key">returns</span> (RegisterWorkerReply);
+
+<span class="c-key">rpc</span> <span class="c-fn">Heartbeat</span>(HeartbeatRequest)
+   <span class="c-key">returns</span> (HeartbeatReply);</pre>
+              <p style="margin-top: 10px;">Workers self-describe: databases, compute_context, max_concurrency. The gateway routes by affinity.</p>
+            </div>
+          </div>
+
+          <div class="col grow" style="gap: 18px;">
+            <div class="card violet">
+              <div class="badge"><span class="pill"></span>Transactions &amp; ingest</div>
+<pre class="code" style="font-size:14px"><span class="c-key">rpc</span> <span class="c-fn">BeginTransaction</span>(...)
+<span class="c-key">rpc</span> <span class="c-fn">CommitTransaction</span>(...)
+<span class="c-key">rpc</span> <span class="c-fn">RollbackTransaction</span>(...)
+
+<span class="c-com">// client-streaming for bulk ingest</span>
+<span class="c-key">rpc</span> <span class="c-fn">IngestData</span>(<span class="c-key">stream</span> IngestChunk)
+   <span class="c-key">returns</span> (IngestReply);</pre>
+              <p style="margin-top: 10px;">A txn id pins all subsequent calls to the same worker connection. Ingest streams Arrow batches into a temp table the client can <span class="mono">INSERT…SELECT</span> from.</p>
+            </div>
+
+            <div class="card gold">
+              <div class="badge"><span class="pill"></span>Why this is small</div>
+              <p>No GetTables, no schema RPCs, no SQL helpers. The DuckDB extension <em>is</em> the catalog client. The protocol just moves SQL one way and Arrow the other. <strong>~220 lines of proto.</strong></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 11 — DuckDB extension (StorageExtension + Catalog)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="The extension is the most fun part. DuckDB has two interfaces nobody uses much — StorageExtension and Catalog. Implement them, and you can pretend to be a normal database. We register an attach scheme, openduck:, and on attach we hand DuckDB an OpenDuckCatalog that mints OpenDuckTableEntry instances on demand. Each table entry installs a scan function that opens a gRPC stream and yields Arrow batches. From the optimizer's perspective, our remote tables are first-class.">
+        <div class="eyebrow">The DuckDB extension</div>
+        <h2 class="title">Pretend to be a normal database.</h2>
+
+        <div class="row" style="margin-top: 28px; gap: 32px; flex: 1;">
+          <div class="col" style="flex: 1.1; gap: 18px; justify-content: center;">
+            <div class="card">
+              <div class="badge gold"><span class="pill"></span>Storage Extension</div>
+              <h3>Owns the <span class="mono">openduck:</span> scheme</h3>
+              <p>DuckDB calls our <span class="mono">attach</span> hook for any URL starting with <span class="mono accent">openduck:</span>. We parse the path, build a connection, return a Catalog.</p>
+            </div>
+            <div class="card">
+              <div class="badge emerald"><span class="pill"></span>Catalog</div>
+              <h3>Mints schemas &amp; tables on demand</h3>
+              <p><span class="mono accent-emerald">OpenDuckCatalog</span> hands back schemas; schemas hand back <span class="mono accent-emerald">OpenDuckTableEntry</span>; tables hand back a scan function that streams Arrow.</p>
+            </div>
+            <div class="card">
+              <div class="badge blue"><span class="pill"></span>Optimizer</div>
+              <h3>First-class catalog entries</h3>
+              <p>Statistics, types, predicate pushdown — DuckDB sees them as it would a local table. Joins and CTEs work without any special syntax.</p>
+            </div>
+          </div>
+
+          <div class="col" style="flex: 1.5; justify-content: center;">
+<pre class="code" style="font-size: 14px; line-height: 1.55;"><span class="c-com">// extension entry — register the storage scheme</span>
+<span class="c-key">extern</span> <span class="c-str">"C"</span> <span class="c-key">void</span> <span class="c-fn">openduck_init</span>(DatabaseInstance &amp;db) {
+  StorageExtension ext;
+  ext.attach        = OpenDuckStorageAttach;     <span class="c-com">// openduck:mydb</span>
+  ext.create_transaction_manager = OpenDuckTxn;
+  db.config.storage_extensions[<span class="c-str">"openduck"</span>] = ext;
+  db.config.storage_extensions[<span class="c-str">"od"</span>]       = ext;  <span class="c-com">// short alias</span>
+}
+
+<span class="c-com">// catalog returns a table entry the optimizer can plan against</span>
+<span class="c-key">unique_ptr</span>&lt;CatalogEntry&gt;
+OpenDuckSchemaEntry::<span class="c-fn">GetEntry</span>(CatalogTransaction tx, CatalogType, <span class="c-key">const string</span> &amp;name) {
+  <span class="c-key">auto</span> meta = client.<span class="c-fn">DescribeTable</span>(database_, name);     <span class="c-com">// gRPC</span>
+  <span class="c-key">return</span> make_uniq&lt;OpenDuckTableEntry&gt;(*<span class="c-key">this</span>, name, meta);
+}
+
+<span class="c-com">// the table's scan function opens an Arrow IPC stream</span>
+TableFunction OpenDuckTableEntry::<span class="c-fn">GetScanFunction</span>(...) {
+  <span class="c-key">return</span> TableFunction(
+      <span class="c-str">"openduck_scan"</span>,
+      arrow_scan_bind, arrow_scan_init, arrow_scan_next);
+}</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 12 — Worker affinity routing
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Now zooming into how the gateway picks a worker. Every worker registers and tells the gateway which databases it serves and what compute_context it lives in. Compute context is opaque — region, instance type, hardware tier. Heartbeats keep the registration fresh. When a query arrives, the gateway scores workers by database affinity first, compute_context match second, and load third. Cheap, deterministic, easy to extend.">
+        <div class="eyebrow">Worker affinity routing</div>
+        <h2 class="title">The gateway picks the right worker — by hand, not by vibes.</h2>
+
+        <div class="row" style="margin-top: 30px; gap: 36px; flex: 1;">
+          <div class="diagram" style="flex: 1.5;">
+            <svg viewBox="0 0 700 480">
+              <defs>
+                <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/>
+                </marker>
+              </defs>
+
+              <!-- query in -->
+              <rect x="20" y="180" width="180" height="120" rx="14" fill="#0e1430" stroke="#fbbf24" stroke-width="2"/>
+              <text x="40" y="210" font-size="12" font-family="'JetBrains Mono'" fill="#fbbf24" letter-spacing="2">QUERY</text>
+              <text x="40" y="240" font-size="14" font-family="'JetBrains Mono'" fill="#e2e8f0">database:</text>
+              <text x="40" y="260" font-size="14" font-family="'JetBrains Mono'" fill="#fcd34d">  warehouse</text>
+              <text x="40" y="282" font-size="14" font-family="'JetBrains Mono'" fill="#e2e8f0">ctx: us-east-1</text>
+
+              <!-- gateway -->
+              <rect x="240" y="120" width="200" height="240" rx="16" fill="#1a1300" stroke="#fbbf24" stroke-width="2"/>
+              <text x="260" y="152" font-size="12" font-family="'JetBrains Mono'" fill="#fbbf24" letter-spacing="2">GATEWAY · ROUTER</text>
+              <text x="260" y="182" font-size="16" font-weight="700" fill="#fcd34d">Score each worker</text>
+              <text x="260" y="214" font-size="13" fill="#cbd5e1">+10  database match</text>
+              <text x="260" y="236" font-size="13" fill="#cbd5e1">+ 5  context match</text>
+              <text x="260" y="258" font-size="13" fill="#cbd5e1">+ 1  spare capacity</text>
+              <text x="260" y="282" font-size="13" fill="#cbd5e1">−10  no heartbeat &gt; 10s</text>
+              <text x="260" y="320" font-size="13" font-family="'JetBrains Mono'" fill="#94a3b8">→ pick highest score,</text>
+              <text x="260" y="338" font-size="13" font-family="'JetBrains Mono'" fill="#94a3b8">  break ties by load</text>
+
+              <line x1="200" y1="240" x2="240" y2="240" stroke="#fbbf24" stroke-width="2" marker-end="url(#arr2)"/>
+              <line x1="440" y1="180" x2="500" y2="100" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+              <line x1="440" y1="240" x2="500" y2="240" stroke="#fbbf24" stroke-width="2" marker-end="url(#arr2)"/>
+              <line x1="440" y1="300" x2="500" y2="380" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+              <!-- workers -->
+              <rect x="500" y="60" width="180" height="80" rx="12" fill="#0e1430" stroke="#34d399" opacity=".6"/>
+              <text x="518" y="86" font-size="12" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">W1 · score 11</text>
+              <text x="518" y="108" font-size="13" fill="#cbd5e1">analytics</text>
+              <text x="518" y="126" font-size="13" fill="#94a3b8">us-east-1, load .8</text>
+
+              <rect x="500" y="200" width="180" height="80" rx="12" fill="#0e1430" stroke="#34d399" stroke-width="2"/>
+              <text x="518" y="226" font-size="12" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">W2 · score 16  ✓</text>
+              <text x="518" y="248" font-size="13" fill="#fcd34d">warehouse</text>
+              <text x="518" y="266" font-size="13" fill="#94a3b8">us-east-1, load .3</text>
+
+              <rect x="500" y="340" width="180" height="80" rx="12" fill="#0e1430" stroke="#34d399" opacity=".6"/>
+              <text x="518" y="366" font-size="12" font-family="'JetBrains Mono'" fill="#34d399" letter-spacing="2">W3 · score 11</text>
+              <text x="518" y="388" font-size="13" fill="#cbd5e1">warehouse</text>
+              <text x="518" y="406" font-size="13" fill="#94a3b8">eu-west-1, load .5</text>
+            </svg>
+          </div>
+
+          <div class="col" style="flex: 1; gap: 18px; justify-content: center;">
+            <div class="card emerald">
+              <div class="badge"><span class="pill"></span>Self-describing workers</div>
+<pre class="code" style="font-size:14px">WorkerRegistration {
+  worker_id        = <span class="c-str">"w-7a3f"</span>
+  databases        = [<span class="c-str">"warehouse"</span>]
+  compute_context  = <span class="c-str">"region=us-east-1"</span>
+  max_concurrency  = <span class="c-num">8</span>
+  tables           = [...]   <span class="c-com">// optional</span>
+}</pre>
+            </div>
+            <div class="card">
+              <div class="badge violet"><span class="pill"></span>Heartbeats keep it fresh</div>
+              <p>Every 5 seconds. Skip three, you're evicted. Re-register and you're back. Stateless workers scale horizontally without coordination.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 13 — Demo intro
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide center" data-notes="Switching to demo. Make sure: gateway and worker are running (dev_stack.sh handles it). Extension is built (cd extensions/openduck && make release). Python wrapper is installed (pip install -e clients/python). Set OPENDUCK_TOKEN. Open three terminals: one for the stack, one for SQL, one for Python.">
+        <div style="text-align:center; max-width: 1100px;">
+          <div class="eyebrow" style="text-align:center;">Live demo · 5 acts</div>
+          <h1 class="mega" style="font-size: 120px; margin-bottom: 24px;">Demo time.</h1>
+          <p class="lead" style="margin: 0 auto;">
+            Bring up the stack, attach a remote database, run a hybrid join, time-travel a snapshot, and swap in a DuckLake-backed worker — without changing a single client query.
+          </p>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 14 — Demo Act 1: bring up the stack
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Act 1. dev_stack.sh starts Postgres + MinIO in Docker, runs migrations, then launches the worker and gateway. Wait for the 'OpenDuck dev stack is running!' banner. If you don't have docker, you can also start each binary manually with cargo run -p openduck.">
+        <div class="eyebrow">Act 1 · Bring up the stack</div>
+        <h2 class="title">Three terminals. One script.</h2>
+
+        <div class="row" style="margin-top: 30px; gap: 24px; flex: 1;">
+          <div class="terminal grow">
+            <div class="tbar"><span class="d r"></span><span class="d y"></span><span class="d g"></span><span class="label">terminal · stack</span></div>
+<pre><span class="prompt">$</span> cd ~/openduck
+<span class="prompt">$</span> bash examples/dev_stack.sh
+
+<span class="info">==&gt; Starting Docker services (Postgres + MinIO)...</span>
+<span class="info">==&gt; Running migrations...</span>
+<span class="info">==&gt; Building workspace...</span>
+<span class="info">==&gt; Starting worker (PID 41203)...</span>
+<span class="info">==&gt; Starting gateway (PID 41207)...</span>
+
+<span class="ok">  OpenDuck dev stack is running!</span>
+  Worker:   127.0.0.1:9898
+  Gateway:  0.0.0.0:7878
+  Postgres: localhost:5433
+  Token:    dev-token</pre>
+          </div>
+
+          <div class="col" style="flex: 1; gap: 18px;">
+            <div class="card gold">
+              <div class="badge"><span class="pill"></span>What's running</div>
+              <p>· <span class="mono accent">openduck-worker</span> on :9898 — embedded DuckDB<br/>
+                 · <span class="mono accent">openduck-gateway</span> on :7878 — auth, routing, plan-split<br/>
+                 · <span class="mono">postgres</span> + <span class="mono">minio</span> — metadata + sealed layer storage</p>
+            </div>
+            <div class="card">
+              <div class="badge"><span class="pill" style="background:#fb923c"></span>Manual fallback</div>
+<pre class="code" style="font-size:13px"><span class="c-com"># If docker is unavailable</span>
+<span class="c-key">export</span> OPENDUCK_TOKEN=dev-token
+cargo run -p openduck-worker  &amp;
+cargo run -p openduck-gateway &amp;</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 15 — Demo Act 2: hello cloud
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Act 2. The hello-world. Open the DuckDB CLI with -unsigned. LOAD the freshly built extension. ATTACH a remote database. SHOW TABLES. Then a SELECT. Point out: nothing in the SQL says 'remote'. The catalog is doing the work.">
+        <div class="eyebrow">Act 2 · Hello, cloud</div>
+        <h2 class="title">Attach a remote database. Query it like it's local.</h2>
+
+        <div class="terminal" style="margin-top: 28px; flex: 1;">
+          <div class="tbar"><span class="d r"></span><span class="d y"></span><span class="d g"></span><span class="label">terminal · duckdb cli</span></div>
+<pre><span class="prompt">$</span> duckdb -unsigned
+
+D <span class="info">LOAD</span> 'extensions/openduck/build/release/extension/openduck/openduck.duckdb_extension';
+
+D <span class="info">ATTACH</span> 'openduck:mydb?endpoint=http://localhost:7878&amp;token=dev-token' <span class="info">AS</span> cloud;
+
+D <span class="info">SHOW TABLES FROM</span> cloud;
+<span class="ok">┌──────────┐
+│   name   │
+├──────────┤
+│ users    │
+│ events   │
+│ products │
+└──────────┘</span>
+
+D <span class="info">SELECT</span> region, count(*) <span class="info">FROM</span> cloud.users <span class="info">GROUP BY</span> region;
+<span class="ok">┌──────────┬──────────────┐
+│  region  │ count_star() │
+├──────────┼──────────────┤
+│ us-east  │         4123 │
+│ us-west  │         2917 │
+│ eu-west  │         1842 │
+└──────────┴──────────────┘</span>
+<span class="com">-- under the hood: ExecuteFragment(plan="SELECT region, count(*) ...")</span>
+<span class="com">--                 → worker → Arrow IPC stream → DuckDB result</span></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 16 — Demo Act 3: hybrid join + EXPLAIN
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Act 3 — the money slide. Create a small local table. Join it against a big remote table. Run EXPLAIN to show the L/R labels. The build side (small local) becomes LOCAL, the probe side (big remote) becomes REMOTE, and a Bridge gets inserted between them. Only the small intermediate stream crosses the wire.">
+        <div class="eyebrow">Act 3 · Hybrid join</div>
+        <h2 class="title">Local table × remote table — <span class="accent">one query, two engines</span>.</h2>
+
+        <div class="row" style="margin-top: 24px; gap: 24px; flex: 1;">
+          <div class="terminal" style="flex: 1.4;">
+            <div class="tbar"><span class="d r"></span><span class="d y"></span><span class="d g"></span><span class="label">terminal · duckdb cli (continued)</span></div>
+<pre>D <span class="info">CREATE TABLE</span> tagged_users <span class="info">AS</span>
+    <span class="info">SELECT</span> * <span class="info">FROM</span> (<span class="info">VALUES</span> (1,'vip'),(2,'beta'),(3,'beta')) t(id, tag);
+
+D <span class="info">EXPLAIN SELECT</span> u.name, t.tag, count(e.id) <span class="info">AS</span> n_events
+  <span class="info">FROM</span> cloud.users u
+  <span class="info">JOIN</span> tagged_users t   <span class="info">ON</span> u.id = t.id
+  <span class="info">JOIN</span> cloud.events e  <span class="info">ON</span> e.user_id = u.id
+  <span class="info">GROUP BY</span> u.name, t.tag;
+
+<span class="ok">┌──────────────────────────────────────────────────┐
+│ Physical Plan                                    │
+├──────────────────────────────────────────────────┤
+│  HASH_GROUP_BY                             [L]   │
+│   └─ HASH_JOIN  (u.id = t.id)              [L]   │
+│       ├─ <span style="color:#34d399">SEQ_SCAN  tagged_users            [L]</span>   │
+│       └─ <span style="color:#fbbf24">BRIDGE  R→L · arrow stream        [L]</span>   │
+│           └─ <span style="color:#60a5fa">REMOTE_SCAN  cloud.users      [R]</span>   │
+│               JOIN cloud.events ...              │
+└──────────────────────────────────────────────────┘</span>
+
+<span class="com">-- only the small probe-side intermediate crosses the wire</span></pre>
+          </div>
+
+          <div class="col" style="flex: 1; gap: 18px; justify-content: center;">
+            <div class="card emerald">
+              <div class="badge"><span class="pill"></span>Build side · LOCAL</div>
+              <p>Small <span class="mono">tagged_users</span> stays put. DuckDB hashes it on your laptop.</p>
+            </div>
+            <div class="card blue">
+              <div class="badge"><span class="pill"></span>Probe side · REMOTE</div>
+              <p>The big join with <span class="mono">cloud.events</span> runs on the worker — close to the data.</p>
+            </div>
+            <div class="card gold">
+              <div class="badge"><span class="pill"></span>Bridge</div>
+              <p>The aggregated probe stream crosses as Arrow IPC. The final group-by happens locally.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 17 — Demo Act 4: snapshots
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Act 4: snapshots. Differential storage means every change is a new snapshot. We expose snapshot IDs in the attach URL. Ingest some data. Read the new state. Then ATTACH the same database at the previous snapshot ID and watch the data disappear. Time travel for free, no coordination, no blocking.">
+        <div class="eyebrow">Act 4 · Snapshots &amp; time travel</div>
+        <h2 class="title">The same database. Two consistent views.</h2>
+
+        <div class="terminal" style="margin-top: 24px; flex: 1;">
+          <div class="tbar"><span class="d r"></span><span class="d y"></span><span class="d g"></span><span class="label">terminal · duckdb cli</span></div>
+<pre>D <span class="info">SELECT</span> snapshot_id <span class="info">FROM</span> openduck_current_snapshot('mydb');
+<span class="ok">  snap_3</span>
+
+D <span class="info">INSERT INTO</span> cloud.events <span class="info">VALUES</span> (gen_random_uuid(), 1, 'click', now());
+D <span class="info">SELECT</span> count(*) <span class="info">FROM</span> cloud.events;
+<span class="ok">  912 348</span>
+
+D <span class="info">SELECT</span> snapshot_id <span class="info">FROM</span> openduck_current_snapshot('mydb');
+<span class="ok">  snap_4</span>   <span class="com">-- new sealed layer, new snapshot</span>
+
+<span class="com">-- attach the same db at the OLD snapshot in a separate alias</span>
+D <span class="info">ATTACH</span> 'openduck:mydb?snapshot=snap_3&amp;token=dev-token' <span class="info">AS</span> past;
+
+D <span class="info">SELECT</span> count(*) <span class="info">FROM</span> past.events;
+<span class="ok">  912 347</span>   <span class="com">-- one fewer — the row we just inserted is gone</span>
+
+D <span class="info">SELECT</span> count(*) <span class="info">FROM</span> cloud.events;
+<span class="ok">  912 348</span>   <span class="com">-- live snapshot still sees it</span></pre>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 18 — Demo Act 5: DuckLake-backed worker
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Act 5: composability. The worker is just a DuckDB instance. Configure it with DuckLake env vars and the worker attaches DuckLake on startup — Postgres metadata + S3 Parquet. The client query never changes. This is the punchline of 'open backend': you bring your own storage layer, OpenDuck handles the wire.">
+        <div class="eyebrow">Act 5 · DuckLake-backed worker</div>
+        <h2 class="title">Swap the storage. The client doesn't notice.</h2>
+
+        <div class="row" style="margin-top: 24px; gap: 24px; flex: 1;">
+          <div class="col" style="flex: 1; gap: 18px;">
+            <div class="terminal">
+              <div class="tbar"><span class="d r"></span><span class="d y"></span><span class="d g"></span><span class="label">terminal · server-side env</span></div>
+<pre><span class="prompt">$</span> <span class="info">export</span> OPENDUCK_TOKEN=dev-token
+<span class="prompt">$</span> <span class="info">export</span> OPENDUCK_DUCKLAKE_METADATA=\
+       postgres://u:p@db/ducklake_meta
+<span class="prompt">$</span> <span class="info">export</span> OPENDUCK_DUCKLAKE_DATA=\
+       s3://my-bucket/ducklake/
+
+<span class="prompt">$</span> cargo run -p openduck-worker
+<span class="info">==&gt; Loading ducklake extension...</span>
+<span class="info">==&gt; ATTACH 'ducklake:lake' (...)</span>
+<span class="ok">==&gt; Worker ready · backend = ducklake</span></pre>
+            </div>
+            <div class="card violet">
+              <div class="badge"><span class="pill"></span>What changed?</div>
+              <p>The worker. Not the protocol, not the client, not the SQL. The OpenDuck wire is the contract.</p>
+            </div>
+          </div>
+
+          <div class="terminal" style="flex: 1.2;">
+            <div class="tbar"><span class="d r"></span><span class="d y"></span><span class="d g"></span><span class="label">terminal · client (unchanged)</span></div>
+<pre><span class="prompt">$</span> python
+&gt;&gt;&gt; <span class="info">import</span> openduck
+&gt;&gt;&gt; con = openduck.connect(<span class="ok">"warehouse"</span>, token=<span class="ok">"dev-token"</span>)
+
+&gt;&gt;&gt; con.sql(<span class="ok">"SHOW TABLES FROM cloud.lake"</span>).show()
+<span class="ok">┌─────────────┐
+│    name     │
+├─────────────┤
+│ customers   │
+│ orders      │
+└─────────────┘</span>
+
+&gt;&gt;&gt; con.sql(<span class="ok">"""
+...   SELECT product, sum(amount) AS revenue
+...   FROM cloud.lake.orders
+...   GROUP BY product
+...   ORDER BY revenue DESC
+... """</span>).show()
+<span class="ok">┌──────────────┬─────────┐
+│    product   │ revenue │
+│ Widget       │ 1000.00 │
+│ Gadget       │  265.50 │
+│ Doohickey    │  120.00 │
+│ Thingamajig  │   60.00 │
+└──────────────┴─────────┘</span></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 19 — Engineering choices
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" hidden data-notes="Engineering choices, fast. Why Rust for the gateway? It's the substrate where tonic and arrow-rs are world-class — and the gateway is where most of the failure modes live, so I wanted strong guarantees there. Why C++ for the extension? Because DuckDB is C++ and the StorageExtension boundary is C++. We compile a tiny Rust bridge static lib for the metadata path. Arrow IPC for the wire because everyone speaks it and DuckDB has native readers. Postgres for metadata because transactions are free.">
+        <div class="eyebrow">Engineering choices</div>
+        <h2 class="title">Use the right tool, not the favorite tool.</h2>
+
+        <div class="pillars" style="margin-top: 30px;">
+          <div class="card gold">
+            <div class="badge"><span class="pill"></span>Rust · gateway, workers, bridge</div>
+            <p style="margin-bottom: 8px;">Where most of the concurrency, networking, and failure modes live. <span class="mono">tonic</span> for gRPC, <span class="mono">arrow-rs</span> for IPC, <span class="mono">tokio</span> for everything async.</p>
+            <p style="color: var(--dim); font-size: 14px;">11 crates · ~25k lines · workspace-wide CI</p>
+          </div>
+          <div class="card emerald">
+            <div class="badge"><span class="pill"></span>C++ · DuckDB extension</div>
+            <p style="margin-bottom: 8px;">Because that's the language of the StorageExtension API. A small <span class="mono">libdiff_bridge.a</span> static lib lets us reach into Rust for the metadata client.</p>
+            <p style="color: var(--dim); font-size: 14px;">vcpkg-based build · CMake · publishable to community-extensions</p>
+          </div>
+          <div class="card blue">
+            <div class="badge"><span class="pill"></span>Arrow IPC · the wire</div>
+            <p style="margin-bottom: 8px;">Self-describing schemas, columnar layout, every language has a reader. The protocol just moves blobs of IPC bytes; nothing else needs to know the schema.</p>
+            <p style="color: var(--dim); font-size: 14px;">~64 MiB max message · streaming · zero schema RPCs</p>
+          </div>
+          <div class="card violet">
+            <div class="badge"><span class="pill"></span>Postgres · metadata</div>
+            <p style="margin-bottom: 8px;">Snapshots, layer manifests, live ingest transactions. Free transactions, mature operational story, easy migration story with <span class="mono">sqlx</span>.</p>
+            <p style="color: var(--dim); font-size: 14px;">Embedded SQLite mode for dev · Postgres for prod</p>
+          </div>
+          <div class="card">
+            <div class="badge gold"><span class="pill"></span>Object store · sealed data</div>
+            <p style="margin-bottom: 8px;">Append-only, content-addressable, immutable. S3, R2, MinIO — anything that speaks the S3 API.</p>
+            <p style="color: var(--dim); font-size: 14px;">FUSE adapter (linux) for filesystem-style mounting</p>
+          </div>
+          <div class="card">
+            <div class="badge gold"><span class="pill"></span>OpenTelemetry · observability</div>
+            <p style="margin-bottom: 8px;">Optional OTLP exporter in <span class="mono">openduck-metrics</span>. Per-RPC latencies, worker queue depth, layer write rates.</p>
+            <p style="color: var(--dim); font-size: 14px;">Off by default · zero-cost when disabled</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 20 — Lessons learned
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" hidden data-notes="Lessons. Three categories. Security: I underestimated how much surface a network database has. RegisterWorker was unauthenticated for a release — anyone reachable could register a rogue worker and steal tokens. Arrow column names were SQL-injectable in the hybrid materialize path. Use the subtle crate, not hand-rolled constant-time compare. Architecture: keep the protocol absurdly small, push complexity into the extension and gateway. Process: benchmark the EXPLAIN early — if your hybrid plan tree isn't readable, you've already lost.">
+        <div class="eyebrow">Lessons learned</div>
+        <h2 class="title">Things I'd tell past-me.</h2>
+
+        <div class="row" style="margin-top: 28px; gap: 28px; flex: 1;">
+          <div class="card" style="flex: 1; border-color: rgba(239,68,68,.4);">
+            <div class="badge" style="color:#fda4af;"><span class="pill" style="background:#fda4af"></span>Security · the hard lessons</div>
+            <ul style="margin:0; padding-left: 20px; color: var(--muted); font-size: 16px; line-height: 1.7;">
+              <li><span class="mono accent">RegisterWorker</span> was unauthenticated — anyone reachable could intercept queries.</li>
+              <li>Arrow column names in hybrid <span class="mono">CREATE TEMP TABLE</span> DDL → <strong>SQL injection</strong>. Always <span class="mono">quote_ident()</span>.</li>
+              <li>Hand-rolled constant-time compare was compiler-optimizable. Use the <span class="mono">subtle</span> crate.</li>
+              <li>Postgres URL was leaking via <span class="mono">Debug</span>. Custom impl that redacts.</li>
+              <li>Path traversal via <span class="mono">storage_uri</span>. Reject <span class="mono">..</span> and absolute paths.</li>
+            </ul>
+          </div>
+          <div class="card emerald" style="flex: 1;">
+            <div class="badge"><span class="pill"></span>Architecture wins</div>
+            <ul style="margin:0; padding-left: 20px; color: var(--muted); font-size: 16px; line-height: 1.7;">
+              <li>Tiny protocol, fat extension. Catalog logic lives client-side.</li>
+              <li>Arrow IPC means no schema RPCs and no negotiation.</li>
+              <li>Snapshots-as-manifests makes time travel trivial.</li>
+              <li>Affinity routing is dumb on purpose — easy to reason about.</li>
+              <li>Workers stay stateless; restart at will.</li>
+            </ul>
+          </div>
+          <div class="card blue" style="flex: 1;">
+            <div class="badge"><span class="pill"></span>Process</div>
+            <ul style="margin:0; padding-left: 20px; color: var(--muted); font-size: 16px; line-height: 1.7;">
+              <li>Make <span class="mono">EXPLAIN</span> beautiful from day one.</li>
+              <li>Round-trip Arrow types end-to-end before adding features.</li>
+              <li>Build the dev_stack.sh first. You'll run it 10,000 times.</li>
+              <li>Type your errors (<span class="mono">CATALOG / BINDER / CONSTRAINT</span>) so clients map cleanly.</li>
+              <li>Set explicit gRPC message limits — never trust defaults.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 21 — What's next  (top 5 features, paired in foundations + payoffs)
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide" data-notes="Five features on deck — top picks. Walk through them roughly in order. (1) The structured plan IR — the real M3. Today we ship SQL strings to workers; the IR replaces that with a serialized operator tree, which makes aggregation push-down and per-operator placement actually work as rewrites instead of being hints. (2) Materialized views — differential storage's killer app. Snapshots make incremental refresh tractable; REFRESH ON COMMIT is the long-term goal. (3) Read-replica workers — promote workers from execution units to cached read replicas. Each worker reports which snapshots it has cached; gateway routes by affinity. Multi-region falls out for free. (4) WASM — DuckDB in the browser, attached to OpenDuck the same way Python or JDBC clients are. Browser-side dual execution unlocks an entire product shape: in-browser column explorer, zero-latency interactive UI. (5) Forks / zero-copy clones — CREATE DATABASE staging FROM production. Metadata-only operation, returns in milliseconds, costs zero bytes. The differential storage substrate makes this almost free. The dependency story matters: items 2, 3, 5 need differential-storage-end-to-end; items 2, 3, 4 need the IR. Foundation work first, then the wins compound.">
+        <div class="eyebrow">Roadmap · five features on deck</div>
+        <h2 class="title" style="margin-bottom: 14px;">What's next</h2>
+        <p class="lead" style="font-size: 19px; max-width: 1300px; margin-bottom: 18px;">
+          The first two are foundations. The other three fall out of them — almost for free.
+        </p>
+
+        <div class="row" style="margin-top: 14px; gap: 20px;">
+          <div class="card emerald grow">
+            <div class="badge"><span class="pill"></span>1 · Structured plan IR · the real M3</div>
+            <h3>Beyond SQL strings on the wire</h3>
+            <p style="font-size: 15px;">A serialized operator tree replaces SQL on the gateway↔worker boundary. Aggregation push-down and per-operator placement become real rewrites instead of leaky hints.</p>
+          </div>
+          <div class="card violet grow">
+            <div class="badge"><span class="pill"></span>2 · Materialized views · diff-storage's killer app</div>
+            <h3><span class="mono">REFRESH ON COMMIT</span></h3>
+            <p style="font-size: 15px;">Snapshots are perfect substrate for cheap MVs. Full refresh first, incremental refresh next — cache-coherent by construction because the snapshot id <em>is</em> the cache key.</p>
+          </div>
+          <div class="card blue grow">
+            <div class="badge"><span class="pill"></span>3 · Read replicas · cache-aware routing</div>
+            <h3>Route reads to the worker that already has them</h3>
+            <p style="font-size: 15px;">Each worker reports which snapshots it has cached on heartbeat. Gateway prefers a worker that's already warm — fewer object-store fetches, geo-distributed reads, failover is just a routing decision.</p>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top: 18px; gap: 20px;">
+          <div class="card gold grow">
+            <div class="badge"><span class="pill"></span>4 · WASM extension · DuckDB in the browser</div>
+            <h3>Browser-side dual execution</h3>
+            <p style="font-size: 15px;">Same extension shape, gRPC-Web on the wire, Arrow IPC unchanged. Unlocks the in-browser column explorer / zero-latency interactive UI shape that MotherDuck pioneered.</p>
+          </div>
+          <div class="card grow" style="border-color: rgba(244,114,182,.35); background: linear-gradient(180deg, rgba(244,114,182,.04), rgba(255,255,255,0)), var(--surface);">
+            <div class="badge" style="color:#f472b6;"><span class="pill" style="background:#f472b6"></span>5 · Forks &amp; zero-copy clones</div>
+            <h3 style="font-family:'JetBrains Mono', monospace; font-size: 18px;">CREATE DATABASE staging FROM production;</h3>
+            <p style="font-size: 15px;">Metadata-only operation. Returns in &lt;100&nbsp;ms regardless of source size; costs zero bytes. Ref-counted layers prevent GC of shared data. MotherDuck's stickiest feature, ours under MIT.</p>
+          </div>
+        </div>
+
+        <p class="body" style="margin-top: 18px; font-size: 14px; color: var(--dim); max-width: 1300px;">
+          Dependency edges — <strong style="color:var(--muted)">2 · 3 · 5</strong> need differential-storage-end-to-end ·
+          <strong style="color:var(--muted)">2 · 3 · 4</strong> need the IR. Foundations first; the wins compound.
+        </p>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           SLIDE 22 — Try it / Thank you
+           ═══════════════════════════════════════════════════════════ -->
+      <section class="slide cover" data-notes="Wrap. Thank the audience. Drop the repo URL on screen. Mention there's an examples/ folder with end-to-end Python and Rust scripts. Offer to take questions about anything we covered or skipped.">
+        <div class="eyebrow">Thank you</div>
+        <h1 style="font-size: 130px; font-weight: 900; letter-spacing: -.045em; line-height: .95; margin: 0;
+                   background: linear-gradient(180deg, #ffffff 0%, #c5cce8 100%);
+                   -webkit-background-clip: text; background-clip: text; color: transparent;">
+          Try it.
+        </h1>
+
+        <div style="margin-top: 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 28px;">
+          <div class="card gold">
+            <div class="badge"><span class="pill"></span>Repo</div>
+            <h3 style="font-family: 'JetBrains Mono', monospace; font-size: 22px; color: var(--text);">github.com/CITGuru/openduck</h3>
+            <p style="margin-top: 6px;">MIT-licensed · 518 ☆ · 21 forks </p>
+          </div>
+          <div class="card emerald">
+            <div class="badge"><span class="pill"></span>5-minute quickstart</div>
+<pre class="code" style="font-size:14px; padding: 14px 18px;">git clone github.com/CITGuru/openduck
+cd openduck &amp;&amp; bash examples/dev_stack.sh   <span class="c-com"># boot</span>
+cd extensions/openduck &amp;&amp; make release       <span class="c-com"># build</span>
+cargo run --example hybrid_plan               <span class="c-com"># go</span></pre>
+          </div>
+          <div class="card blue">
+            <div class="badge"><span class="pill"></span>What to try next</div>
+<pre class="code" style="font-size:13px; padding: 14px 18px;">cargo run --example hybrid_plan      <span class="c-com">// L/R plan tree</span>
+cargo run --example snapshot_reads   <span class="c-com">// time travel</span>
+cargo run --example live_tx_ingest   <span class="c-com">// stream ingest</span>
+cargo run --example grpc_roundtrip   <span class="c-com">// raw protocol</span></pre>
+          </div>
+          <div class="card violet">
+            <div class="badge"><span class="pill"></span>Stay in touch</div>
+            <p style="margin-bottom: 10px;">Issues, PRs, discussions all welcome. If you've ever wanted to hack on a query optimizer, the gateway is a tiny, well-scoped place to start.</p>
+            <p style="font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--violet); margin: 0;">
+              toby@finic.ai<br/>
+              oyetoketoby80@gmail.com<br/>
+              oyetoketoby@bitpowr.com
+            </p>
+          </div>
+        </div>
+
+        <div class="meta" style="bottom: 56px;">
+          <div>OpenDuck v0.1 · MIT</div>
+          <div>Questions?</div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <div class="notes" id="notes"><h4>Speaker notes</h4><div id="notes-body"></div></div>
+
+  <script>
+    // ─────────────────────────────────────────────────────────────
+    // Deck navigation, scaling, fullscreen, presenter notes
+    // ─────────────────────────────────────────────────────────────
+    // Skip slides marked with the `hidden` attribute — they stay in the
+    // file (easy to restore) but disappear from navigation, counter, and progress.
+    const slides   = Array.from(document.querySelectorAll('.slide:not([hidden])'));
+    const total    = slides.length;
+    const counter  = document.getElementById('counter');
+    const progress = document.getElementById('progress');
+    const notesEl  = document.getElementById('notes');
+    const notesBody= document.getElementById('notes-body');
+    const deck     = document.getElementById('deck');
+    let i = 0;
+
+    function fmt(n) { return String(n).padStart(2, '0'); }
+    function show(idx) {
+      i = (idx + total) % total;
+      slides.forEach((s, k) => s.classList.toggle('active', k === i));
+      counter.textContent = `${fmt(i + 1)} / ${fmt(total)}`;
+      progress.style.width = `${((i + 1) / total) * 100}%`;
+      notesBody.textContent = slides[i].dataset.notes || '';
+      // sync URL hash
+      history.replaceState(null, '', `#${i + 1}`);
+    }
+    function next() { show(i + 1); }
+    function prev() { show(i - 1); }
+
+    function fitDeck() {
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const scale = Math.min(W / 1600, H / 900);
+      deck.style.transform = `scale(${scale})`;
+    }
+    window.addEventListener('resize', fitDeck);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      switch (e.key) {
+        case 'ArrowRight':
+        case 'PageDown':
+        case ' ':         next(); e.preventDefault(); break;
+        case 'ArrowLeft':
+        case 'PageUp':    prev(); e.preventDefault(); break;
+        case 'Home':      show(0); break;
+        case 'End':       show(total - 1); break;
+        case 'f': case 'F':
+          if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+          else document.exitFullscreen();
+          break;
+        case 'n': case 'N':
+          notesEl.classList.toggle('show');
+          break;
+      }
+    });
+
+    document.getElementById('next').addEventListener('click', next);
+    document.getElementById('prev').addEventListener('click', prev);
+
+    // jump to hashed slide on load
+    const hashIdx = parseInt((location.hash || '#1').slice(1), 10);
+    if (!isNaN(hashIdx)) show(hashIdx - 1); else show(0);
+    fitDeck();
+  </script>
+</body>
+</html>

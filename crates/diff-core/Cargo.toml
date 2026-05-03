@@ -1,11 +1,11 @@
 [package]
 name = "diff-core"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
 
 [dependencies]
-thiserror.workspace = true
+thiserror = { workspace = true }
 uuid = { workspace = true }
 bytes = { workspace = true }
 

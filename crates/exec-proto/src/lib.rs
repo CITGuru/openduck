@@ -1,6 +1,7 @@
 //! Generated gRPC types for OpenDuck v1 execution.
 
 pub mod auth;
+pub mod identity;
 
 pub mod openduck {
     pub mod v1 {
@@ -9,9 +10,14 @@ pub mod openduck {
 }
 
 pub use openduck::v1::execute_fragment_chunk;
+pub use openduck::v1::execute_fragment_error;
 pub use openduck::v1::execution_service_client::ExecutionServiceClient;
 pub use openduck::v1::execution_service_server::{ExecutionService, ExecutionServiceServer};
+pub use openduck::v1::ingest_chunk;
 pub use openduck::v1::{
-    ArrowIpcBatch, CancelReply, CancelRequest, ExecuteFragmentChunk, ExecuteFragmentRequest,
-    HeartbeatReply, HeartbeatRequest, RegisterWorkerReply, WorkerRegistration,
+    ArrowIpcBatch, BeginTransactionReply, BeginTransactionRequest, CancelReply, CancelRequest,
+    CommitTransactionReply, CommitTransactionRequest, ExecuteFragmentChunk, ExecuteFragmentError,
+    ExecuteFragmentRequest, HeartbeatReply, HeartbeatRequest, IngestChunk, IngestColumn,
+    IngestMetadata, IngestReply, RegisterWorkerReply, RollbackTransactionReply,
+    RollbackTransactionRequest, WorkerRegistration,
 };
