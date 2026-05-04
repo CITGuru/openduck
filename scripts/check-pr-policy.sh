@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validates the current branch against the Powa code-organization policy:
+# Validates the current branch against the project's code-organization policy:
 #   1. Branch name matches (feat|bugfix|docs|tests|work)/<descriptor>.
 #   2. No commit on the branch carries a Co-Authored-By: trailer.
 #   3. Every commit author email matches the configured global git user.email
@@ -54,7 +54,7 @@ run_self_test() {
   script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
   local tmp
-  tmp="$(mktemp -d -t powa-pr-policy-selftest.XXXXXX)"
+  tmp="$(mktemp -d -t pr-policy-selftest.XXXXXX)"
   # Expand $tmp NOW so cleanup still works after the local var goes out of scope.
   trap "rm -rf '$tmp'" EXIT
 
