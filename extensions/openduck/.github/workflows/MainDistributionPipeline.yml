@@ -70,3 +70,97 @@ jobs:
       deploy_latest: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/tags/v') }}
       exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;windows_amd64_rtools;linux_amd64_musl;linux_arm64_musl'
+
+  # On v* tag pushes, attach pre-built extension binaries for the four
+  # quickstart triples (linux x86_64/arm64, mac x86_64/arm64) to the
+  # GitHub release so the README quickstart becomes "curl + LOAD".
+  #
+  # Artifacts come from the same `duckdb-stable-build` matrix CI runs on
+  # every push, so the published binaries are reproducible from a clean
+  # runner. Upstream uploads each platform under
+  #   `openduck-${duckdb_version}-extension-${arch}`
+  # containing a single `openduck.duckdb_extension` file (see
+  # extension-ci-tools/.github/workflows/_extension_distribution.yml).
+  github-release:
+    name: Attach binaries to GitHub release
+    needs: duckdb-stable-build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      DUCKDB_VERSION: v1.5.1
+      EXT_NAME: openduck
+    steps:
+      - name: Download linux_amd64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: openduck-v1.5.1-extension-linux_amd64
+          path: dist/linux_amd64
+      - name: Download linux_arm64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: openduck-v1.5.1-extension-linux_arm64
+          path: dist/linux_arm64
+      - name: Download osx_amd64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: openduck-v1.5.1-extension-osx_amd64
+          path: dist/osx_amd64
+      - name: Download osx_arm64 extension
+        uses: actions/download-artifact@v4
+        with:
+          name: openduck-v1.5.1-extension-osx_arm64
+          path: dist/osx_arm64
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p release
+          for arch in linux_amd64 linux_arm64 osx_amd64 osx_arm64; do
+            src="dist/${arch}/${EXT_NAME}.duckdb_extension"
+            dst="release/${EXT_NAME}-${TAG}-${arch}.duckdb_extension"
+            if [ ! -f "$src" ]; then
+              echo "Missing artifact: $src" >&2
+              exit 1
+            fi
+            cp "$src" "$dst"
+          done
+          ( cd release && sha256sum *.duckdb_extension > "${EXT_NAME}-${TAG}-SHA256SUMS.txt" )
+          ls -l release
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            ## Pre-built `openduck` extension binaries
+
+            Loadable DuckDB extension binaries built against DuckDB ${{ env.DUCKDB_VERSION }}.
+
+            | Platform        | Asset                                                                  |
+            | --------------- | ---------------------------------------------------------------------- |
+            | macOS (Apple Silicon) | `openduck-${{ github.ref_name }}-osx_arm64.duckdb_extension`     |
+            | macOS (Intel)         | `openduck-${{ github.ref_name }}-osx_amd64.duckdb_extension`     |
+            | Linux x86_64          | `openduck-${{ github.ref_name }}-linux_amd64.duckdb_extension`   |
+            | Linux arm64           | `openduck-${{ github.ref_name }}-linux_arm64.duckdb_extension`   |
+
+            SHA-256 checksums are in `openduck-${{ github.ref_name }}-SHA256SUMS.txt`.
+
+            **Quickstart:**
+
+            ```sh
+            curl -L -o openduck.duckdb_extension \
+              https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/openduck-${{ github.ref_name }}-osx_arm64.duckdb_extension
+
+            duckdb -unsigned -c "
+              LOAD '$(pwd)/openduck.duckdb_extension';
+              ATTACH 'openduck:mydb?endpoint=http://localhost:7878&token=...' AS cloud;
+              SELECT * FROM cloud.users LIMIT 10;
+            "
+            ```
+
+            See the [extension README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/extensions/openduck/README.md) for full quickstart instructions.

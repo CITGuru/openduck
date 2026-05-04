@@ -22,7 +22,7 @@ The gateway includes a plan splitter that assigns `LOCAL` or `REMOTE` placement 
 ```
 
 **3. Open protocol — anyone can implement the backend.**
-The data plane is two RPCs in a single `.proto` file (plus two for worker lifecycle). Any service that accepts SQL and streams Arrow IPC batches is a compatible backend. The extension is the universal DuckDB client.
+Eight RPCs in a single `.proto` file: three data plane (`ExecuteFragment`, `CancelExecution`, `IngestData`), three transactions (`BeginTransaction`, `CommitTransaction`, `RollbackTransaction`), and two worker lifecycle (`RegisterWorker`, `Heartbeat`). Any service that implements them — accepting SQL and streaming Arrow IPC batches back — is a compatible backend. The extension is the universal DuckDB client.
 
 ## Usage
 
@@ -101,14 +101,65 @@ od:<database>?endpoint=<url>&token=<token>
 
 ## Registered storage schemes
 
-| Scheme | Example |
-|--------|---------|
-| `openduck:` | `ATTACH 'openduck:mydb?token=xxx' AS cloud;` |
-| `od:` | `ATTACH 'od:mydb?token=xxx' AS cloud;` |
+| Scheme | Example | What it does |
+|--------|---------|--------------|
+| `openduck:` | `ATTACH 'openduck:mydb?endpoint=...&token=xxx' AS cloud;` | Gateway/worker remote attach. Stores in plain DuckDB files on the worker; **no differential storage in v0.1** (planned for v0.2 — see [`docs/internal/DIFFERENTIAL_STORAGE_E2E.md`](../../docs/internal/DIFFERENTIAL_STORAGE_E2E.md)). |
+| `od:` | `ATTACH 'od:mydb?endpoint=...&token=xxx' AS cloud;` | Alias for `openduck:`. Same gateway/worker semantics. |
+| `openduck://` | `ATTACH 'openduck://mydb/database.duckdb?secret=prod_storage' AS db;` | In-process FileSystem. Routes DuckDB I/O through differential storage when the extension is built with `OPENDUCK_BRIDGE_LIB`. Supports `?snapshot=<uuid>` for read-only point-in-time attaches. Falls back to in-memory storage (with a warning) when the bridge is not linked. |
 
-## Building
+> **Differential storage paths (v0.1):** the `openduck://` in-process scheme is the only path that touches `StorageBackend`. The gateway/worker `openduck:` path stores in plain DuckDB files; snapshot reads (`?snapshot=`), seal-on-commit, and `openduck_current_snapshot()` over the gateway path are tracked in [`docs/internal/DIFFERENTIAL_STORAGE_E2E.md`](../../docs/internal/DIFFERENTIAL_STORAGE_E2E.md) and ship in v0.2.
 
-### Prerequisites
+## Install
+
+### Pre-built binaries (recommended)
+
+Tagged releases ship pre-built `openduck.duckdb_extension` binaries for four
+platforms — no toolchain install required. Download the asset for your
+platform, verify the checksum, and `LOAD` it.
+
+| Platform                | Asset                                                |
+| ----------------------- | ---------------------------------------------------- |
+| macOS (Apple Silicon)   | `openduck-<tag>-osx_arm64.duckdb_extension`          |
+| macOS (Intel)           | `openduck-<tag>-osx_amd64.duckdb_extension`          |
+| Linux x86_64            | `openduck-<tag>-linux_amd64.duckdb_extension`        |
+| Linux arm64             | `openduck-<tag>-linux_arm64.duckdb_extension`        |
+
+```sh
+TAG=v0.1.0   # latest release tag
+PLATFORM=osx_arm64   # one of: osx_arm64, osx_amd64, linux_amd64, linux_arm64
+BASE="https://github.com/CITGuru/openduck/releases/download/${TAG}"
+
+curl -L -o openduck.duckdb_extension \
+  "${BASE}/openduck-${TAG}-${PLATFORM}.duckdb_extension"
+curl -L -o SHA256SUMS.txt "${BASE}/openduck-${TAG}-SHA256SUMS.txt"
+
+# Verify
+grep "openduck-${TAG}-${PLATFORM}.duckdb_extension" SHA256SUMS.txt \
+  | sed "s|openduck-${TAG}-${PLATFORM}.duckdb_extension|openduck.duckdb_extension|" \
+  | sha256sum -c -
+```
+
+Then load it from any DuckDB client (the extension is unsigned, so the
+`-unsigned` flag / `allow_unsigned_extensions` setting is required):
+
+```sh
+duckdb -unsigned -c "
+  LOAD '$(pwd)/openduck.duckdb_extension';
+  ATTACH 'openduck:mydb?endpoint=http://localhost:7878&token=...' AS cloud;
+  SELECT * FROM cloud.users LIMIT 10;
+"
+```
+
+> **Note:** Once the extension is published to DuckDB's community-extensions
+> repository, `INSTALL openduck FROM community; LOAD openduck;` will work
+> without any download or `-unsigned` flag.
+
+### Build from source (fallback)
+
+Use this path when there is no release for your platform or you need to test
+local changes.
+
+#### Prerequisites
 
 - CMake 3.5+, C++17 compiler
 - gRPC, Protobuf, and Apache Arrow C++ libraries
@@ -127,7 +178,7 @@ git clone https://github.com/Microsoft/vcpkg.git
 export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
 ```
 
-### Build
+#### Build
 
 ```sh
 make
@@ -140,7 +191,7 @@ Output:
 ./build/release/extension/openduck/openduck.duckdb_extension    # Loadable binary
 ```
 
-### Test
+#### Test
 
 ```sh
 make test
@@ -148,7 +199,7 @@ make test
 
 ## Protocol
 
-The extension communicates with backends using the OpenDuck Protocol defined in [`execution.proto`](../../proto/openduck/v1/execution.proto):
+The extension communicates with backends using the OpenDuck Protocol defined in [`execution.proto`](../../proto/openduck/v1/execution.proto). One service, eight RPCs:
 
 ### Data plane
 
@@ -156,6 +207,15 @@ The extension communicates with backends using the OpenDuck Protocol defined in 
 |-----|---------|
 | `ExecuteFragment` | Send SQL (or plan IR), stream back Arrow IPC batches |
 | `CancelExecution` | Cancel a running execution by ID (requires `access_token`) |
+| `IngestData` | Client-streaming: push Arrow IPC batches into a worker-side `TEMP TABLE` for cross-catalog writes |
+
+### Transactions
+
+| RPC | Purpose |
+|-----|---------|
+| `BeginTransaction` | Open a transaction; returns an opaque `transaction_id` pinned to a worker connection |
+| `CommitTransaction` | Commit the pinned transaction |
+| `RollbackTransaction` | Roll back the pinned transaction |
 
 ### Worker lifecycle (gateway-side)
 
@@ -164,6 +224,6 @@ The extension communicates with backends using the OpenDuck Protocol defined in 
 | `RegisterWorker` | Worker self-registers with database affinity and capabilities |
 | `Heartbeat` | Worker sends periodic keepalives to maintain registration |
 
-All RPCs validate `access_token` when `OPENDUCK_TOKEN` is set. The extension sends the token on both `ExecuteFragment` and `CancelExecution` calls.
+All RPCs validate `access_token` when `OPENDUCK_TOKEN` is set. The extension sends the token on every call.
 
-Any service implementing the data plane RPCs is a compatible backend. See the [top-level README](../../README.md) for comparisons with Arrow Flight SQL and MotherDuck.
+Any service implementing these RPCs is a compatible backend. See the [top-level README](../../README.md) for comparisons with Arrow Flight SQL and MotherDuck.
