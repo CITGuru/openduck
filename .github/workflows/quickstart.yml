@@ -1,0 +1,118 @@
+name: Quickstart (weekly)
+
+# Verifies that ./scripts/quickstart.sh runs end-to-end on clean
+# GitHub-hosted runners — the same surface a self-hosting user hits
+# on `git clone && ./scripts/quickstart.sh`. If this goes red, the
+# README's recommended path is broken regardless of which PM filed it.
+#
+# Schedule: Mondays 06:00 UTC. Also dispatchable on demand and on
+# pushes that touch the script or workflow itself.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/quickstart.sh'
+      - '.github/workflows/quickstart.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: 'line-tables-only'
+  CARGO_INCREMENTAL: '0'
+  CARGO_NET_RETRY: '5'
+
+jobs:
+  quickstart:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reclaim disk on Linux — `duckdb-rs` (bundled) compiles a full
+      # DuckDB tree from cargo and easily overflows the ~14 GB free
+      # on GH-hosted Ubuntu runners. macOS runners have plenty of room.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Warm cargo cache so subsequent runs hit the <15 min target;
+      # cold first runs may exceed it (this is documented in the
+      # quickstart script header).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: quickstart-${{ matrix.os }}
+
+      # ── Linux: docker is pre-installed; quickstart runs the default path. ─
+      - name: Install prereqs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            protobuf-compiler postgresql-client libfuse3-dev pkg-config
+
+      - name: Run quickstart (Linux)
+        if: runner.os == 'Linux'
+        run: ./scripts/quickstart.sh --no-color
+
+      # ── macOS: GH runners don't ship Docker. Use Homebrew Postgres + ─────
+      # `--skip-docker`. Postgres listens on 5432 here, not the 5433
+      # the dockerised path uses, so we redirect via env.
+      - name: Install prereqs (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install protobuf libpq postgresql@16
+          # libpq is keg-only; expose pg_isready / psql on PATH.
+          echo "$(brew --prefix libpq)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix postgresql@16)/bin" >> "$GITHUB_PATH"
+
+      - name: Start native Postgres (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew services start postgresql@16
+          # Wait for it before we hand off to the script (the script
+          # will also wait, this just gives a clearer error if the
+          # service failed to come up).
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -p 5432 -q && break
+            sleep 1
+          done
+          # Create the role + database the quickstart expects. Owner
+          # of the Homebrew install is the runner user, so we connect
+          # as that user (no password).
+          psql -h localhost -p 5432 -d postgres -c \
+            "CREATE ROLE openduck WITH LOGIN PASSWORD 'openduck' SUPERUSER" || true
+          psql -h localhost -p 5432 -d postgres -c \
+            "CREATE DATABASE openduck_meta OWNER openduck" || true
+
+      - name: Run quickstart (macOS)
+        if: runner.os == 'macOS'
+        env:
+          PG_PORT: '5432'
+          DATABASE_URL: postgres://openduck:openduck@localhost:5432/openduck_meta
+        run: ./scripts/quickstart.sh --no-color --skip-docker
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickstart-logs-${{ matrix.os }}
+          path: .openduck-quickstart-logs/
+          if-no-files-found: ignore

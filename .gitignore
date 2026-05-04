@@ -12,3 +12,10 @@
 /target/
 mydb
 .cache/*
+*.pyc
+*.egg-info/
+
+# scripts/quickstart.sh runtime state
+.openduck-data/
+.openduck-quickstart-logs/
+.openduck-quickstart.pids
