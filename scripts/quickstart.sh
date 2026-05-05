@@ -290,6 +290,20 @@ if ! cargo build "${WORKSPACE_ARGS[@]}" 2>&1 | tee "$build_log"; then
 fi
 ok "workspace built"
 
+# Pre-build the hybrid_execution example. `cargo build --workspace` does NOT
+# compile examples by default, so without this step `cargo run --example` at
+# the end of the script pays a hidden compile (~2 min) on every warm-cache
+# repeat. Pre-building here folds that cost into the build phase, where the
+# user is already expecting to wait, and turns the run stage into a pure exec.
+step "Pre-building hybrid_execution example"
+ex_build_log="$LOG_DIR/cargo-build-example.log"
+if ! cargo build --example hybrid_execution -p openduck-examples 2>&1 | tee "$ex_build_log"; then
+  fail "cargo build --example hybrid_execution failed"
+  hint "full log at $ex_build_log"
+  exit 1
+fi
+ok "hybrid_execution example built"
+
 # Optional: C++ DuckDB extension (slow; off by default).
 if [[ "$WITH_EXTENSION" -eq 1 ]]; then
   step "Building C++ DuckDB extension (15-25 min cold)"
