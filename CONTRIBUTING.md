@@ -67,3 +67,20 @@ scripts/check-pr-policy.sh --self-test      # built-in test of the author check
 | `docs/quickstart_links`  | `docs add quickstart` |
 | `tests/grpc_smoke`       | `add-tests`           |
 | `work/spike_hot_path`    | `wip/foo`             |
+
+## Documentation discipline
+
+Reviews will request changes on PRs that violate any of these:
+
+1. **No internal coordination references in shipped files.** Internal
+   ticket identifiers and internal control-plane URLs do not belong in
+   code comments, READMEs/docs, examples, commit messages, or PR
+   descriptions. Rationale and links belong in the upstream tracker,
+   not in this repo.
+2. **No redundant doc/readme churn.** A docs change must be required to
+   make a feature work, fix a bug, or unblock a user. Per-directory
+   READMEs that describe their directory are fine; do not edit the
+   repo-root README without explicit instruction.
+3. **Lean PR descriptions.** Summary plus test plan only. Skip "notes
+   for review" boilerplate about branch naming, co-author trailers, or
+   the CONTRIBUTING checklist — those duplicate this file.
