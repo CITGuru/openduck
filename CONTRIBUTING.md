@@ -3,6 +3,38 @@
 This is the code-organization policy for openduck.
 It applies to all contributors — humans and agents.
 
+## Working tree safety (mandatory)
+
+Before any **destructive git op** — `git checkout <branch>`, `git switch
+<branch>`, `git reset --hard`, `git rebase`, `git clean`, `git pull
+--rebase`, `git worktree remove` — you MUST either:
+
+1. confirm a clean working tree:
+
+   ```bash
+   scripts/preflight-destructive-git.sh check
+   ```
+
+   (exits non-zero if anything is staged, modified, or untracked), or
+
+2. stash with `--include-untracked` first:
+
+   ```bash
+   scripts/preflight-destructive-git.sh stash <op-label>
+   ```
+
+   (e.g. `stash switch_main`, `stash rebase_origin`).
+
+`--include-untracked` is non-negotiable. A plain `git stash` does NOT save
+top-level untracked files/dirs, and `git checkout` / `git reset --hard`
+will silently delete them. This rule exists because of the apps/landing
+incident in the melt repo — see [POWA-224](/POWA/issues/POWA-224) and
+[POWA-227](/POWA/issues/POWA-227).
+
+The helper has a self-test (`scripts/preflight-destructive-git.sh
+self-test`) that proves it refuses to proceed and captures untracked
+files when stashing.
+
 ## Workflow
 
 1. **Branch per major change.** Never commit to `main`. Cut a fresh branch from
